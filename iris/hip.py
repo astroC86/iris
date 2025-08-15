@@ -177,6 +177,3 @@ def hip_malloc(size):
 
 def hip_free(ptr):
     hip_try(hip_runtime.hipFree(ptr))
-
-
-print(_amdsmi_try(0x1))
