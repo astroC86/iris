@@ -13,35 +13,6 @@ hip_runtime = ctypes.cdll.LoadLibrary(rt_path)
 amdsmi_path = 'libamd_smi.so'
 amdsmi = ctypes.cdll.LoadLibrary(amdsmi_path)
 
-
-class amdsmi_status_t(enum.IntEnum):
-    AMDSMI_STATUS_SUCCESS = 0x0
-    AMDSMI_STATUS_INVALID_ARGS = 0x1
-    AMDSMI_STATUS_NOT_SUPPORTED = 0x2
-    AMDSMI_STATUS_FILE_ERROR = 0x3
-    AMDSMI_STATUS_PERMISSION = 0x4
-    AMDSMI_STATUS_OUT_OF_RESOURCES = 0x5
-    AMDSMI_STATUS_INTERNAL_EXCEPTION = 0x6
-    AMDSMI_STATUS_INPUT_OUT_OF_BOUNDS = 0x7
-    AMDSMI_STATUS_INIT_ERROR = 0x8
-    AMDSMI_INITIALIZATION_ERROR = AMDSMI_STATUS_INIT_ERROR
-    AMDSMI_STATUS_NOT_YET_IMPLEMENTED = 0x9
-    AMDSMI_STATUS_NOT_FOUND = 0xA
-    AMDSMI_STATUS_INSUFFICIENT_SIZE = 0xB
-    AMDSMI_STATUS_INTERRUPT = 0xC
-    AMDSMI_STATUS_UNEXPECTED_SIZE = 0xD
-    AMDSMI_STATUS_NO_DATA = 0xE
-    AMDSMI_STATUS_UNEXPECTED_DATA = 0xF
-    AMDSMI_STATUS_BUSY = 0x10
-    AMDSMI_STATUS_REFCOUNT_OVERFLOW = 0x11
-    AMDSMI_STATUS_SETTING_UNAVAILABLE = 0x12
-    AMDSMI_STATUS_AMDGPU_RESTART_ERR = 0x13
-    AMDSMI_STATUS_DRM_ERROR = 0x14
-    AMDSMI_STATUS_FAIL_LOAD_MODULE = 0x15
-    AMDSMI_STATUS_FAIL_LOAD_SYMBOL = 0x16
-    AMDSMI_STATUS_UNKNOWN_ERROR = 0xFFFFFFFF
-
-
 def hip_try(err):
     if err != 0:
         hip_runtime.hipGetErrorString.restype = ctypes.c_char_p
@@ -50,33 +21,11 @@ def hip_try(err):
 
 
 def _amdsmi_try(err):
-    if err != amdsmi_status_t.AMDSMI_STATUS_SUCCESS:
-        error_messages = {
-            amdsmi_status_t.AMDSMI_STATUS_INVALID_ARGS: "AMDSMI_STATUS_INVALID_ARGS - Invalid parameters",
-            amdsmi_status_t.AMDSMI_STATUS_NOT_SUPPORTED: "AMDSMI_STATUS_NOT_SUPPORTED - Command not supported",
-            amdsmi_status_t.AMDSMI_STATUS_FILE_ERROR: "AMDSMI_STATUS_FILE_ERROR - Problem accessing a file",
-            amdsmi_status_t.AMDSMI_STATUS_PERMISSION: "AMDSMI_STATUS_PERMISSION - Permission Denied",
-            amdsmi_status_t.AMDSMI_STATUS_OUT_OF_RESOURCES: "AMDSMI_STATUS_OUT_OF_RESOURCES - Not enough memory or resources",
-            amdsmi_status_t.AMDSMI_STATUS_INTERNAL_EXCEPTION: "AMDSMI_STATUS_INTERNAL_EXCEPTION - An internal exception was caught",
-            amdsmi_status_t.AMDSMI_STATUS_INPUT_OUT_OF_BOUNDS: "AMDSMI_STATUS_INPUT_OUT_OF_BOUNDS - The provided input is out of allowable or safe range",
-            amdsmi_status_t.AMDSMI_STATUS_INIT_ERROR: "AMDSMI_STATUS_INIT_ERROR - An error occurred when initializing internal data structures",
-            amdsmi_status_t.AMDSMI_STATUS_NOT_YET_IMPLEMENTED: "AMDSMI_STATUS_NOT_YET_IMPLEMENTED - Not implemented yet",
-            amdsmi_status_t.AMDSMI_STATUS_NOT_FOUND: "AMDSMI_STATUS_NOT_FOUND - Device or resource not found",
-            amdsmi_status_t.AMDSMI_STATUS_INSUFFICIENT_SIZE: "AMDSMI_STATUS_INSUFFICIENT_SIZE - Not enough resources were available for the operation",
-            amdsmi_status_t.AMDSMI_STATUS_INTERRUPT: "AMDSMI_STATUS_INTERRUPT - An interrupt occurred during execution of function",
-            amdsmi_status_t.AMDSMI_STATUS_UNEXPECTED_SIZE: "AMDSMI_STATUS_UNEXPECTED_SIZE - An unexpected amount of data was read",
-            amdsmi_status_t.AMDSMI_STATUS_NO_DATA: "AMDSMI_STATUS_NO_DATA - No data was found for a given input",
-            amdsmi_status_t.AMDSMI_STATUS_UNEXPECTED_DATA: "AMDSMI_STATUS_UNEXPECTED_DATA - The data read or provided to function is not what was expected",
-            amdsmi_status_t.AMDSMI_STATUS_BUSY: "AMDSMI_STATUS_BUSY - Device is busy",
-            amdsmi_status_t.AMDSMI_STATUS_REFCOUNT_OVERFLOW: "AMDSMI_STATUS_REFCOUNT_OVERFLOW - An internal reference counter exceeded maximum value",
-            amdsmi_status_t.AMDSMI_STATUS_SETTING_UNAVAILABLE: "AMDSMI_STATUS_SETTING_UNAVAILABLE - Setting is not available",
-            amdsmi_status_t.AMDSMI_STATUS_AMDGPU_RESTART_ERR: "AMDSMI_STATUS_AMDGPU_RESTART_ERR - AMDGPU restart failed",
-            amdsmi_status_t.AMDSMI_STATUS_DRM_ERROR: "AMDSMI_STATUS_DRM_ERROR - Error when calling libdrm",
-            amdsmi_status_t.AMDSMI_STATUS_FAIL_LOAD_MODULE: "AMDSMI_STATUS_FAIL_LOAD_MODULE - Failed to load library module",
-            amdsmi_status_t.AMDSMI_STATUS_FAIL_LOAD_SYMBOL: "AMDSMI_STATUS_FAIL_LOAD_SYMBOL - Failed to load symbol",
-            amdsmi_status_t.AMDSMI_STATUS_UNKNOWN_ERROR: "AMDSMI_STATUS_UNKNOWN_ERROR - An unknown error occurred",
-        }
-        error_string = error_messages.get(err, "AMDSMI_STATUS_UNKNOWN_ERROR - An unknown error occurred")
+    if err != 0:
+        error_string = ctypes.c_char_p()
+        amdsmi.amdsmi_status_code_to_string.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_char_p)]
+        amdsmi.amdsmi_status_code_to_string(ctypes.c_int(err), ctypes.byref(error_string))
+        error_string = error_string.value.decode("utf-8")
         raise RuntimeError(f"AMDSMI error code {err}: {error_string}")
 
 
@@ -228,3 +177,6 @@ def hip_malloc(size):
 
 def hip_free(ptr):
     hip_try(hip_runtime.hipFree(ptr))
+
+
+print(_amdsmi_try(0x1))
