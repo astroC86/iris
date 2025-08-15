@@ -181,7 +181,8 @@ def get_wall_clock_rate(device_id):
 def get_arch_string(device_id = None):
     if device_id is None:
         device_id = get_device_id()
-    arch_name = torch.cuda.get_device_properties(device_id).gcnArchName[:6]
+    arch_full = torch.cuda.get_device_properties(device_id).gcnArchName
+    arch_name = arch_full.split(':')[0]
     return arch_name
 
 
