@@ -54,7 +54,7 @@ def test_load_api(dtype, BLOCK_SIZE):
     num_ranks = shmem.get_num_ranks()
     heap_bases = shmem.get_heap_bases()
     source_rank = shmem.get_rank()
-    partner =  int((source_rank + num_ranks // 2) % num_ranks)
+    partner = int((source_rank + num_ranks // 2) % num_ranks)
 
     data = shmem.full((BLOCK_SIZE,), source_rank, dtype=dtype)
     results = shmem.zeros_like(data)
