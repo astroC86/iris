@@ -442,6 +442,13 @@ def put(from_ptr, to_ptr, from_rank, to_rank, heap_bases, mask=None):
 
 
 @triton.jit
+def copy(dst_ptr, src_ptr, from_rank, to_rank, heap_bases, mask=None):
+    translated_src = __translate(src_ptr, from_rank, to_rank, heap_bases)
+    data = tl.load(translated_src, mask=mask)
+    tl.store(dst_ptr, data, mask=mask)
+
+
+@triton.jit
 def atomic_add(pointer, val, from_rank, to_rank, heap_bases, mask=None, sem=None, scope=None):
     """
     Performs an atomic add at the specified rank's memory location.
