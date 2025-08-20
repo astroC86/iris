@@ -26,8 +26,8 @@ def copy_kernel(
         src_data  = data    + BLOCK_SIZE * cur_rank
         dest_data = results + BLOCK_SIZE * target_rank
         iris.copy(
-            dest_data + offsets,
             src_data  + offsets,
+            dest_data + offsets,
             cur_rank,
             target_rank,
             heap_bases,
@@ -53,7 +53,7 @@ def copy_kernel(
         32,
     ],
 )
-def test_copy_get_semantics(dtype, BLOCK_SIZE):    
+def test_copy(dtype, BLOCK_SIZE):    
     shmem = iris.iris(1 << 20)
     num_ranks = shmem.get_num_ranks()
     heap_bases = shmem.get_heap_bases()
@@ -77,15 +77,13 @@ def test_copy_get_semantics(dtype, BLOCK_SIZE):
     shmem.barrier()
 
     expected  = shmem.zeros((num_ranks, BLOCK_SIZE), dtype=dtype)
-    expected_2 = torch.zeros((num_ranks, BLOCK_SIZE), dtype=dtype, device="cuda")
     for rank_id in range(num_ranks):
-        expected[rank_id, :] = 999999
-        expected_2[rank_id, :] = (rank_id + num_ranks) * (cur_rank + 1)
+        expected[rank_id, :] = (rank_id + num_ranks) * (cur_rank + 1)
     
     try:
         torch.testing.assert_close(results, expected, rtol=0, atol=0)
     except AssertionError as e:
         print(e)
-        print("Expected:", expected_2)
+        print("Expected:", expected)
         print("Actual:", results)
         raise

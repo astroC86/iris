@@ -407,11 +407,7 @@ def get(from_ptr, to_ptr, from_rank, to_rank, heap_bases, mask=None):
     Returns:
         None
     """
-    translated_from_ptr = __translate(from_ptr, from_rank, to_rank, heap_bases)
-
-    data = tl.load(translated_from_ptr, mask=mask)
-
-    tl.store(to_ptr, data, mask=mask)
+    copy(from_ptr, to_ptr, from_rank, to_rank , heap_bases, mask)
 
 
 @triton.jit
@@ -434,15 +430,29 @@ def put(from_ptr, to_ptr, from_rank, to_rank, heap_bases, mask=None):
     Returns:
         None
     """
-    translated_to_ptr = __translate(to_ptr, from_rank, to_rank, heap_bases)
-
-    data = tl.load(from_ptr, mask=mask)
-
-    tl.store(translated_to_ptr, data, mask=mask)
+    copy(from_ptr, to_ptr, from_rank, to_rank, heap_bases, mask)
 
 
 @triton.jit
-def copy(dst_ptr, src_ptr, from_rank, to_rank, heap_bases, mask=None):
+def copy(src_ptr, dst_ptr, from_rank, to_rank, heap_bases, mask=None):
+    """
+    Copies data from the specified rank's memory into the destination rank's memory.
+    This function performs the transfer by translating src_ptr from the from_rank's address
+    space to the to_rank's address space, performing a masked load from the translated
+    source, and storing the loaded data to dst_ptr in the to_rank memory location.
+    If from_rank and to_rank are the same, this function performs a local copy operation.
+
+    Args:
+        src_ptr (triton.PointerType, or block of dtype=triton.PointerType): Pointer in the from_rank's local memory from which to read data.
+        dst_ptr (triton.PointerType, or block of dtype=triton.PointerType): Pointer in the to_rank's local memory where the data will be written.
+        from_rank (int): The rank ID that owns src_ptr (source rank).
+        to_rank (int): The rank ID that will receive the data (destination rank).
+        heap_bases (triton.PointerType): Array containing the heap base addresses for all ranks.
+        mask (Block of triton.int1, optional): If mask[idx] is false, do not load from the translated src_ptr[idx] and do not store to dst_ptr[idx]. Defaults to None.
+
+    Returns:
+        None
+    """
     translated_src = __translate(src_ptr, from_rank, to_rank, heap_bases)
     data = tl.load(translated_src, mask=mask)
     tl.store(dst_ptr, data, mask=mask)
