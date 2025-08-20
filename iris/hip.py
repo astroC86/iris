@@ -10,8 +10,9 @@ import torch
 rt_path = "libamdhip64.so"
 hip_runtime = ctypes.cdll.LoadLibrary(rt_path)
 
-amdsmi_path = 'libamd_smi.so'
+amdsmi_path = "libamd_smi.so"
 amdsmi = ctypes.cdll.LoadLibrary(amdsmi_path)
+
 
 def hip_try(err):
     if err != 0:
@@ -127,11 +128,11 @@ def get_wall_clock_rate(device_id):
     return wall_clock_rate.value
 
 
-def get_arch_string(device_id = None):
+def get_arch_string(device_id=None):
     if device_id is None:
         device_id = get_device_id()
     arch_full = torch.cuda.get_device_properties(device_id).gcnArchName
-    arch_name = arch_full.split(':')[0]
+    arch_name = arch_full.split(":")[0]
     return arch_name
 
 
@@ -146,19 +147,14 @@ def _amdsmi_shutdown():
     _amdsmi_try(amdsmi.amdsmi_shut_down())
 
 
-def get_num_xcd(device_id = None):
+def get_num_xcd(device_id=None):
     if device_id is None:
         device_id = get_device_id()
-    _amdsmi_init()  
+    _amdsmi_init()
     xcd_counter = ctypes.c_uint16(0)
-    amdsmi.rsmi_dev_metrics_xcd_counter_get.argtypes = [ ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint16)]
-    _amdsmi_try(
-        amdsmi.rsmi_dev_metrics_xcd_counter_get(
-            ctypes.c_uint32(device_id), 
-            ctypes.byref(xcd_counter)
-        )
-    )
-    _amdsmi_shutdown()      
+    amdsmi.rsmi_dev_metrics_xcd_counter_get.argtypes = [ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint16)]
+    _amdsmi_try(amdsmi.rsmi_dev_metrics_xcd_counter_get(ctypes.c_uint32(device_id), ctypes.byref(xcd_counter)))
+    _amdsmi_shutdown()
     return xcd_counter.value
 
 
