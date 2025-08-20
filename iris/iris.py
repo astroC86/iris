@@ -407,7 +407,7 @@ def get(from_ptr, to_ptr, from_rank, to_rank, heap_bases, mask=None):
     Returns:
         None
     """
-    copy(from_ptr, to_ptr, from_rank, to_rank , heap_bases, mask)
+    copy(from_ptr, to_ptr, from_rank, to_rank, heap_bases, mask)
 
 
 @triton.jit

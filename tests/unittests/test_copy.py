@@ -21,18 +21,11 @@ def copy_kernel(
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < BLOCK_SIZE
-     
+
     for target_rank in range(num_ranks):
-        src_data  = data    + BLOCK_SIZE * cur_rank
+        src_data = data + BLOCK_SIZE * cur_rank
         dest_data = results + BLOCK_SIZE * target_rank
-        iris.copy(
-            src_data  + offsets,
-            dest_data + offsets,
-            cur_rank,
-            target_rank,
-            heap_bases,
-            mask
-        )
+        iris.copy(src_data + offsets, dest_data + offsets, cur_rank, target_rank, heap_bases, mask)
 
 
 @pytest.mark.parametrize(
@@ -53,7 +46,7 @@ def copy_kernel(
         32,
     ],
 )
-def test_copy(dtype, BLOCK_SIZE):    
+def test_copy(dtype, BLOCK_SIZE):
     shmem = iris.iris(1 << 20)
     num_ranks = shmem.get_num_ranks()
     heap_bases = shmem.get_heap_bases()
@@ -66,20 +59,13 @@ def test_copy(dtype, BLOCK_SIZE):
 
     results = shmem.zeros((num_ranks, BLOCK_SIZE), dtype=dtype)
     grid = lambda meta: (1,)
-    copy_kernel[grid](
-        data,
-        results, 
-        cur_rank, 
-        num_ranks,
-        BLOCK_SIZE, 
-        heap_bases
-    )
+    copy_kernel[grid](data, results, cur_rank, num_ranks, BLOCK_SIZE, heap_bases)
     shmem.barrier()
 
-    expected  = shmem.zeros((num_ranks, BLOCK_SIZE), dtype=dtype)
+    expected = shmem.zeros((num_ranks, BLOCK_SIZE), dtype=dtype)
     for rank_id in range(num_ranks):
         expected[rank_id, :] = (rank_id + num_ranks) * (cur_rank + 1)
-    
+
     try:
         torch.testing.assert_close(results, expected, rtol=0, atol=0)
     except AssertionError as e:
