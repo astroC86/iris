@@ -29,14 +29,14 @@ def ping_pong(
     pid = tl.program_id(0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    
+
     data_mask = offsets < len
     flag_mask = offsets < 1
     time_stmp_mask = offsets < 1
 
     for i in range(iter + skip):
-        if (i == skip):
-            start = read_realtime(); 
+        if i == skip:
+            start = read_realtime()
             tl.atomic_xchg(mm_begin_timestamp_ptr + offsets, start, time_stmp_mask)
         if curr_rank == (i + 1) % 2:
             while tl.load(flag, cache_modifier=".cv", volatile=True) != i + 1:
@@ -50,7 +50,7 @@ def ping_pong(
             iris.put(flag + offsets, flag + offsets, curr_rank, peer, heap_bases, flag_mask)
             while tl.load(flag, cache_modifier=".cv", volatile=True) != i + 1:
                 pass
-    stop = read_realtime(); 
+    stop = read_realtime()
     tl.atomic_xchg(mm_end_timestamp_ptr + offsets, stop, time_stmp_mask)
 
 
@@ -66,7 +66,7 @@ def ping_pong(
 @pytest.mark.parametrize(
     "heap_size",
     [
-       (1 << 33),
+        (1 << 33),
     ],
 )
 def test_load_bench(dtype, heap_size):
@@ -77,22 +77,34 @@ def test_load_bench(dtype, heap_size):
     assert num_ranks == 2
 
     BLOCK_SIZE = 1
-    BUFFER_LEN = 64*1024
+    BUFFER_LEN = 64 * 1024
 
     iter = 200
     skip = 20
     mm_begin_timestamp = torch.zeros(BLOCK_SIZE, dtype=torch.int64, device="cuda")
-    mm_end_timestamp   = torch.zeros(BLOCK_SIZE, dtype=torch.int64, device="cuda")
+    mm_end_timestamp = torch.zeros(BLOCK_SIZE, dtype=torch.int64, device="cuda")
 
     source_buffer = shmem.ones(BUFFER_LEN, dtype=dtype)
     result_buffer = shmem.zeros_like(source_buffer)
-    flag          = shmem.ones(1, dtype=dtype)
+    flag = shmem.ones(1, dtype=dtype)
 
     grid = lambda meta: (1,)
-    ping_pong[grid](source_buffer, result_buffer, BUFFER_LEN, skip, iter, flag, cur_rank, BLOCK_SIZE, heap_bases,mm_begin_timestamp, mm_end_timestamp)
+    ping_pong[grid](
+        source_buffer,
+        result_buffer,
+        BUFFER_LEN,
+        skip,
+        iter,
+        flag,
+        cur_rank,
+        BLOCK_SIZE,
+        heap_bases,
+        mm_begin_timestamp,
+        mm_end_timestamp,
+    )
     shmem.barrier()
     begin_val = mm_begin_timestamp.cpu().item()
     end_val = mm_end_timestamp.cpu().item()
-    with open(f'timestamps_{cur_rank}.txt', 'w') as f:
+    with open(f"timestamps_{cur_rank}.txt", "w") as f:
         f.write(f"mm_begin_timestamp: {begin_val}\n")
         f.write(f"mm_end_timestamp: {end_val}\n")
