@@ -13,7 +13,7 @@ import iris
 # 2. for remote get with one other rank.
 # 3. for remote get with more than one rank (if num_ranks > 2).
 @triton.jit
-def get_kernel( 
+def get_kernel(
     data,
     results,
     cur_rank: tl.constexpr,
