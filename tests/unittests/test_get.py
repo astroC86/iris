@@ -13,7 +13,7 @@ import iris
 # 2. for remote get with one other rank.
 # 3. for remote get with more than one rank (if num_ranks > 2).
 @triton.jit
-def get_kernel(
+def get_kernel( 
     data,
     results,
     cur_rank: tl.constexpr,
@@ -31,7 +31,7 @@ def get_kernel(
     # Loop over all ranks, get the stored data.
     # load to local register, accumulate.
     for target_rank in range(num_ranks):
-        iris.get(data + offsets, results + offsets, cur_rank, target_rank, heap_bases, mask=mask)
+        iris.copy(data + offsets, results + offsets, cur_rank, target_rank, heap_bases, mask=mask)
         acc += tl.load(results + offsets, mask=mask)
 
     # Store the accumulated value back to the output.

@@ -387,53 +387,6 @@ def store(pointer, value, from_rank, to_rank, heap_bases, mask=None):
 
 
 @triton.jit
-def get(from_ptr, to_ptr, from_rank, to_rank, heap_bases, mask=None):
-    """
-    Copies data from the specified rank's memory to the current rank's local memory.
-
-    This function performs a memory read operation by translating the from_ptr
-    from the current rank's address space to the from_rank's address space, loading data
-    from the from_rank memory location, and storing it to the local to_ptr.
-    If the from_rank is the same as the current rank, this function performs a local copy operation.
-
-    Args:
-        from_ptr (triton.PointerType, or block of dtype=triton.PointerType): Pointer in the current rank's address space that will be translated to the from_rank's address space. Must be the current rank where the pointer is local.
-        to_ptr (triton.PointerType, or block of dtype=triton.PointerType): Pointer in the current rank's local memory where the data will be stored.
-        from_rank (int): The from_rank ID from which to read the data.
-        to_rank (int): The current rank ID where the data will be stored.
-        heap_bases (triton.PointerType): Array containing the heap base addresses for all ranks.
-        mask (Block of triton.int1, optional): If mask[idx] is false, do not load the data at address from_ptr[idx] and do not store to to_ptr[idx]. Defaults to None.
-
-    Returns:
-        None
-    """
-    copy(from_ptr, to_ptr, from_rank, to_rank, heap_bases, mask)
-
-
-@triton.jit
-def put(from_ptr, to_ptr, from_rank, to_rank, heap_bases, mask=None):
-    """
-    Copies data from the current rank's local memory to the specified rank's memory.
-    This function performs a memory write operation by loading data from the current
-    rank's from_ptr, translating the to_ptr from the current rank's address
-    space to the to_rank's address space, and storing the data to the to_rank memory location.
-    If the to_rank is the same as the current rank, this function performs a local copy operation.
-
-    Args:
-        from_ptr (triton.PointerType, or block of dtype=triton.PointerType): Pointer in the current rank's local memory from which to read data.
-        to_ptr (triton.PointerType, or block of dtype=triton.PointerType): Pointer in the current rank's address space that will be translated to the to_rank's address space. Must be the current rank where the pointer is local.
-        from_rank (int): The current rank ID from which to read the data.
-        to_rank (int): The to_rank ID to which the data will be written.
-        heap_bases (triton.PointerType): Array containing the heap base addresses for all ranks.
-        mask (Block of triton.int1, optional): If mask[idx] is false, do not load the data at address from_ptr[idx] and do not store to to_ptr[idx]. Defaults to None.
-
-    Returns:
-        None
-    """
-    copy(from_ptr, to_ptr, from_rank, to_rank, heap_bases, mask)
-
-
-@triton.jit
 def copy(src_ptr, dst_ptr, from_rank, to_rank, heap_bases, mask=None):
     """
     Copies data from the specified rank's memory into the destination rank's memory.
