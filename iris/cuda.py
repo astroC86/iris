@@ -1,0 +1,128 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
+
+import ctypes
+import numpy as np
+import sys
+
+rt_path = "libcudart.so"
+cuda_runtime = ctypes.cdll.LoadLibrary(rt_path)
+
+
+def cuda_try(err):
+    if err != 0:
+        cuda_runtime.cudaGetErrorString.restype = ctypes.c_char_p
+        error_string = cuda_runtime.cudaGetErrorString(ctypes.c_int(err)).decode("utf-8")
+        raise RuntimeError(f"cuda error code {err}: {error_string}")
+
+
+class cudaIpcMemHandle_t(ctypes.Structure):
+    _fields_ = [("internal", ctypes.c_byte * 128)]
+
+
+def open_ipc_handle(ipc_handle_data, rank):
+    ptr = ctypes.c_void_p()
+    cudaIpcMemLazyEnablePeerAccess = ctypes.c_uint(1)
+    cuda_runtime.cudaIpcOpenMemHandle.argtypes = [
+        ctypes.POINTER(ctypes.c_void_p),
+        cudaIpcMemHandle_t,
+        ctypes.c_uint,
+    ]
+    if isinstance(ipc_handle_data, np.ndarray):
+        if ipc_handle_data.dtype != np.uint8 or ipc_handle_data.size != 128:
+            raise ValueError("ipc_handle_data must be a 128-element uint8 numpy array")
+        ipc_handle_bytes = ipc_handle_data.tobytes()
+        ipc_handle_data = (ctypes.c_char * 128).from_buffer_copy(ipc_handle_bytes)
+    else:
+        raise TypeError("ipc_handle_data must be a numpy.ndarray of dtype uint8 with 128 elements")
+
+    raw_memory = ctypes.create_string_buffer(128)
+    ctypes.memset(raw_memory, 0x00, 128)
+    ipc_handle_struct = cudaIpcMemHandle_t.from_buffer(raw_memory)
+    ipc_handle_data_bytes = bytes(ipc_handle_data)
+    ctypes.memmove(raw_memory, ipc_handle_data_bytes, 128)
+
+    cuda_try(
+        cuda_runtime.cudaIpcOpenMemHandle(
+            ctypes.byref(ptr),
+            ipc_handle_struct,
+            cudaIpcMemLazyEnablePeerAccess,
+        )
+    )
+
+    return ptr.value
+
+
+def get_ipc_handle(ptr, rank):
+    ipc_handle = cudaIpcMemHandle_t()
+    cuda_try(cuda_runtime.cudaIpcGetMemHandle(ctypes.byref(ipc_handle), ptr))
+    return ipc_handle
+
+
+def count_devices():
+    device_count = ctypes.c_int()
+    cuda_try(cuda_runtime.cudaGetDeviceCount(ctypes.byref(device_count)))
+    return device_count.value
+
+
+def set_device(gpu_id):
+    cuda_try(cuda_runtime.cudaSetDevice(gpu_id))
+
+
+def get_device_id():
+    device_id = ctypes.c_int()
+    cuda_try(cuda_runtime.cudaGetDevice(ctypes.byref(device_id)))
+    return device_id.value
+
+
+def get_cu_count(device_id=None):
+    if device_id is None:
+        device_id = get_device_id()
+
+    cudaDeviceAttributeMultiprocessorCount = 16
+    cu_count = ctypes.c_int()
+
+    cuda_try(
+        cuda_runtime.cudaDeviceGetAttribute(ctypes.byref(cu_count), cudaDeviceAttributeMultiprocessorCount, device_id)
+    )
+
+    return cu_count.value
+
+
+# Starting ROCm 6.5
+# def get_xcc_count(device_id=None):
+#     if device_id is None:
+#         device_id = get_device()
+
+#     cudaDeviceAttributeNumberOfXccs = ??
+#     xcc_count = ctypes.c_int()
+
+#     cuda_try(cuda_runtime.cudaDeviceGetAttribute(
+#         ctypes.byref(xcc_count),
+#         cudaDeviceAttributeNumberOfXccs,
+#         device_id
+#     ))
+
+#     return xcc_count
+
+
+def get_wall_clock_rate(device_id):
+    cudaDevAttrMemoryClockRate = 36
+    wall_clock_rate = ctypes.c_int()
+    status = cuda_runtime.cudaDeviceGetAttribute(ctypes.byref(wall_clock_rate), cudaDevAttrMemoryClockRate, device_id)
+    cuda_try(status)
+    return wall_clock_rate.value
+
+
+def malloc_fine_grained(size):
+    return cuda_malloc(size)
+
+
+def cuda_malloc(size):
+    ptr = ctypes.c_void_p()
+    cuda_try(cuda_runtime.cudaMalloc(ctypes.byref(ptr), size))
+    return ptr
+
+
+def cuda_free(ptr):
+    cuda_try(cuda_runtime.cudaFree(ptr))
