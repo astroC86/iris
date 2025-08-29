@@ -87,6 +87,7 @@ def get_cu_count(device_id=None):
 
     return cu_count.value
 
+
 def get_rocm_version():
     major, minor = -1, -1
     with open("/opt/rocm/.info/version", "r") as version_file:
