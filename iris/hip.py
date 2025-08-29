@@ -87,24 +87,6 @@ def get_cu_count(device_id=None):
 
     return cu_count.value
 
-
-# Starting ROCm 6.5
-# def get_xcc_count(device_id=None):
-#     if device_id is None:
-#         device_id = get_device()
-
-#     hipDeviceAttributeNumberOfXccs = ??
-#     xcc_count = ctypes.c_int()
-
-#     hip_try(hip_runtime.hipDeviceGetAttribute(
-#         ctypes.byref(xcc_count),
-#         hipDeviceAttributeNumberOfXccs,
-#         device_id
-#     ))
-
-#     return xcc_count
-
-
 def get_rocm_version():
     major, minor = -1, -1
     with open("/opt/rocm/.info/version", "r") as version_file:
