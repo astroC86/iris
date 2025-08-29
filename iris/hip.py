@@ -108,10 +108,11 @@ def get_cu_count(device_id=None):
 def get_rocm_version():
     major, minor = -1, -1
     with open("/opt/rocm/.info/version", "r") as version_file:
-            version = version_file.readline().strip()
-            major = int(version.split(".")[0])
-            minor = int(version.split(".")[1])
+        version = version_file.readline().strip()
+        major = int(version.split(".")[0])
+        minor = int(version.split(".")[1])
     return (major, minor)
+
 
 def get_wall_clock_rate(device_id):
     hipDeviceAttributeWallClockRate = 10017
@@ -135,14 +136,11 @@ def get_num_xcc(device_id=None):
     if device_id is None:
         device_id = get_device_id()
     rocm_major, _ = get_rocm_version()
-    if rocm_major < 7 : return 8
+    if rocm_major < 7:
+        return 8
     hipDeviceAttributeNumberOfXccs = 10018
     xcc_count = ctypes.c_int()
-    hip_try(hip_runtime.hipDeviceGetAttribute(
-        ctypes.byref(xcc_count),
-        hipDeviceAttributeNumberOfXccs,
-        device_id
-    ))
+    hip_try(hip_runtime.hipDeviceGetAttribute(ctypes.byref(xcc_count), hipDeviceAttributeNumberOfXccs, device_id))
     return xcc_count.value
 
 
