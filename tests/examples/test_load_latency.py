@@ -75,7 +75,6 @@ if __name__ == "__main__":
     local_latency = torch.zeros((num_ranks), dtype=torch.float32, device="cuda")
 
     source_buffer = shmem.ones(BUFFER_LEN, dtype=dtype)
-    result_buffer = shmem.zeros_like(source_buffer)
     flag = shmem.ones(1, dtype=dtype)
 
     grid = lambda meta: (1,)
