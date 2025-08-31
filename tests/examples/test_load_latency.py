@@ -9,35 +9,8 @@ import triton.language as tl
 import numpy as np
 import iris
 from iris._mpi_helpers import mpi_allgather
-# from examples.common.utils import read_realtime
+from examples.common.utils import read_realtime
 
-@triton.jit
-def read_realtime():
-    tmp = tl.inline_asm_elementwise(
-        asm="mov.u64 $0, %globaltimer;",
-        constraints=("=l"),
-        args=[],
-        dtype=tl.int64,
-        is_pure=False,
-        pack=1,
-    )
-    return tmp
-
-@triton.jit()
-def gather_latencies(
-    local_latency,
-    global_latency,
-    curr_rank,
-    num_ranks ,
-    BLOCK_SIZE: tl.constexpr,
-    heap_bases: tl.tensor
-):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-
-    latency_mask = offsets < num_ranks
-    iris.put(local_latency + offsets, global_latency +  curr_rank * num_ranks + offsets, curr_rank, 0, heap_bases, mask=latency_mask)
 
 @triton.jit()
 def ping_pong(
@@ -66,7 +39,7 @@ def ping_pong(
             start = read_realtime()
             tl.atomic_xchg(mm_begin_timestamp_ptr + peer_rank * BLOCK_SIZE + offsets, start, time_stmp_mask)
         first_rank = tl.minimum(curr_rank, peer_rank) if (i % 2) == 0 else tl.maximum(curr_rank, peer_rank)
-        token_first_done  = i + 1
+        token_first_done = i + 1
         token_second_done = i + 2
         if curr_rank == first_rank:
             iris.put(data + offsets, data + offsets, curr_rank, peer_rank, heap_bases, mask=data_mask)
@@ -82,8 +55,9 @@ def ping_pong(
     stop = read_realtime()
     tl.atomic_xchg(mm_end_timestamp_ptr + peer_rank * BLOCK_SIZE + offsets, stop, time_stmp_mask)
 
+
 if __name__ == "__main__":
-    dtype     = torch.int32
+    dtype = torch.int32
     heap_size = 1 << 32
     shmem = iris.iris(heap_size)
     num_ranks = shmem.get_num_ranks()
@@ -96,37 +70,43 @@ if __name__ == "__main__":
     iter = 200
     skip = 1
     mm_begin_timestamp = torch.zeros((num_ranks, BLOCK_SIZE), dtype=torch.int64, device="cuda")
-    mm_end_timestamp   = torch.zeros((num_ranks, BLOCK_SIZE), dtype=torch.int64, device="cuda")
+    mm_end_timestamp = torch.zeros((num_ranks, BLOCK_SIZE), dtype=torch.int64, device="cuda")
 
-    local_latency      = torch.zeros((num_ranks), dtype=torch.float32, device="cuda")
+    local_latency = torch.zeros((num_ranks), dtype=torch.float32, device="cuda")
 
     source_buffer = shmem.ones(BUFFER_LEN, dtype=dtype)
     result_buffer = shmem.zeros_like(source_buffer)
-    flag          = shmem.ones(1, dtype=dtype)
+    flag = shmem.ones(1, dtype=dtype)
 
     grid = lambda meta: (1,)
     for source_rank in range(num_ranks):
         for destination_rank in range(num_ranks):
             if source_rank != destination_rank and cur_rank in [source_rank, destination_rank]:
                 peer_for_me = destination_rank if cur_rank == source_rank else source_rank
-                ping_pong[grid](source_buffer, 
-                                BUFFER_LEN, 
-                                skip, iter, 
-                                flag, 
-                                cur_rank,  peer_for_me,
-                                BLOCK_SIZE, 
-                                heap_bases, 
-                                mm_begin_timestamp, 
-                                mm_end_timestamp)
+                ping_pong[grid](
+                    source_buffer,
+                    BUFFER_LEN,
+                    skip,
+                    iter,
+                    flag,
+                    cur_rank,
+                    peer_for_me,
+                    BLOCK_SIZE,
+                    heap_bases,
+                    mm_begin_timestamp,
+                    mm_end_timestamp,
+                )
             shmem.barrier()
-    
+
     for destination_rank in range(num_ranks):
-        local_latency[destination_rank] = (mm_end_timestamp.cpu()[destination_rank] - mm_begin_timestamp.cpu()[destination_rank]) / iter
-    
+        local_latency[destination_rank] = (
+            mm_end_timestamp.cpu()[destination_rank] - mm_begin_timestamp.cpu()[destination_rank]
+        ) / iter
+
     latency_matrix = mpi_allgather(local_latency.cpu())
 
     if cur_rank == 0:
-        with open(f"latency.txt", "w") as f:
+        with open("latency.txt", "w") as f:
             f.write(" ," + ", ".join(f"R{j}" for j in range(num_ranks)) + "\n")
             for i in range(num_ranks):
                 row_entries = []
