@@ -37,7 +37,7 @@ def ping_pong(
     for i in range(niter + skip):
         if i == skip:
             start = read_realtime()
-            tl.atomic_xchg(mm_begin_timestamp_ptr + peer_rank * BLOCK_SIZE + offsets, start, time_stmp_mask)
+            tl.store(mm_begin_timestamp_ptr + peer_rank * BLOCK_SIZE + offsets, start, time_stmp_mask)
         first_rank = tl.minimum(curr_rank, peer_rank) if (i % 2) == 0 else tl.maximum(curr_rank, peer_rank)
         token_first_done = i + 1
         token_second_done = i + 2
@@ -53,7 +53,7 @@ def ping_pong(
             iris.store(flag + offsets, token_second_done, curr_rank, peer_rank, heap_bases, flag_mask)
 
     stop = read_realtime()
-    tl.atomic_xchg(mm_end_timestamp_ptr + peer_rank * BLOCK_SIZE + offsets, stop, time_stmp_mask)
+    tl.store(mm_end_timestamp_ptr + peer_rank * BLOCK_SIZE + offsets, stop, time_stmp_mask)
 
 
 if __name__ == "__main__":
