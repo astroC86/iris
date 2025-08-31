@@ -67,8 +67,8 @@ if __name__ == "__main__":
     BLOCK_SIZE = 1
     BUFFER_LEN = 1
 
-    iter = 200
-    skip = 1
+    iter = 100
+    skip = 10
     mm_begin_timestamp = torch.zeros((num_ranks, BLOCK_SIZE), dtype=torch.int64, device="cuda")
     mm_end_timestamp = torch.zeros((num_ranks, BLOCK_SIZE), dtype=torch.int64, device="cuda")
 
