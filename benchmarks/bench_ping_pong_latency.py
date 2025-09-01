@@ -45,14 +45,14 @@ def ping_pong(
         token_second_done = i + 2
         if curr_rank == first_rank:
             iris.store(data + offsets, i, curr_rank, peer_rank, heap_bases, mask=data_mask)
-            iris.store(flag + offsets, token_first_done, curr_rank, peer_rank, heap_bases, mask=flag_mask)
+            iris.atomic_xchg(flag + offsets, token_first_done, curr_rank, peer_rank, heap_bases, mask=flag_mask)
             while tl.load(flag, cache_modifier=".cv", volatile=True) != token_second_done:
                 pass
         else:
             while tl.load(flag, cache_modifier=".cv", volatile=True) != token_first_done:
                 pass
             iris.store(data + offsets, i, curr_rank, peer_rank, heap_bases, mask=data_mask)
-            iris.store(flag + offsets, token_second_done, curr_rank, peer_rank, heap_bases, mask=flag_mask)
+            iris.atomic_xchg(flag + offsets, token_second_done, curr_rank, peer_rank, heap_bases, mask=flag_mask)
 
     stop = read_realtime()
     tl.store(mm_end_timestamp_ptr + peer_rank * BLOCK_SIZE + offsets, stop, time_stmp_mask)
