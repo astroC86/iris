@@ -126,3 +126,14 @@ def memset_tensor(tensor, value):
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE,
     )
+
+
+@tl.constexpr_function
+def prev_pow2(n: tl.constexpr):
+    n_val = int(n)
+    return 2 ** math.floor(math.log2(n_val))
+
+
+@tl.constexpr_function
+def log2(n: tl.constexpr):
+    return math.log2(int(n))
