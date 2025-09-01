@@ -10,7 +10,7 @@ import torch
 import triton
 import triton.language as tl
 import iris
-from iris._mpi_helpers import mpi_allgather 
+from iris._mpi_helpers import mpi_allgather
 from examples.common.utils import read_realtime
 
 
@@ -184,7 +184,6 @@ def save_results(latency_matrix: torch.Tensor, out: str | None) -> None:
         _write_csv(path, latency_matrix)
     else:
         raise ValueError(f"Unsupported output file extension: {out}")
-
 
 
 def print_run_settings(
