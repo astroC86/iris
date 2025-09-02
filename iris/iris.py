@@ -909,7 +909,7 @@ class Iris:
             torch.cuda.synchronize()
         else:
             stream.synchronize()
-        self.world_barrier()
+        world_barrier()
 
     def get_device(self):
         return self.memory_pool.device
