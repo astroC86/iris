@@ -275,10 +275,10 @@ class Iris:
         torch.cuda.synchronize()
         # MPI barrier
         world_barrier()
-    
+
     def barrier_on_stream(self, stream: torch.cuda.Stream | None = None):
         flags = self.zeros((self.num_ranks, 1), dtype=torch.int32)
-        stream  = stream or torch.cuda.default_stream()
+        stream = stream or torch.cuda.default_stream()
         with torch.cuda.stream(stream):
             __barrier[(1,)](flags, self.cur_rank, self.num_ranks, self.heap_bases)
         world_barrier()
@@ -692,27 +692,26 @@ def atomic_max(pointer, val, from_rank, to_rank, heap_bases, mask=None, sem=None
     return tl.atomic_max(translated_ptr, val, mask=mask, sem=sem, scope=scope)
 
 
-
 @triton.jit
 def __barrier(
-        flags,
-        cur_rank,
-        num_ranks: tl.constexpr,
-        heap_bases: tl.tensor,
-    ):
+    flags,
+    cur_rank,
+    num_ranks: tl.constexpr,
+    heap_bases: tl.tensor,
+):
     # We split the ranks into two groups : ones that fall inside the largest pow 2 <= num ranks (A) and those outside (B).
-    grp_size : tl.constexpr = prev_pow2(num_ranks)
+    grp_size: tl.constexpr = prev_pow2(num_ranks)
     if cur_rank >= grp_size:
         # if i am in group B notify my partner in group A (partner = cur_rank - grp_size)
-        # my partner would be my index partner in group A 
-        partner = cur_rank - grp_size        
+        # my partner would be my index partner in group A
+        partner = cur_rank - grp_size
         atomic_xchg(flags + cur_rank, 1, cur_rank, partner, heap_bases, scope="sys", sem="release")
-        # and then i wait for partner to reply back to me 
+        # and then i wait for partner to reply back to me
         # ( usually this happens at the end of the communication, see last atomic_xchg)
         while tl.atomic_cas(flags + partner, 1, 0, scope="sys", sem="acquire") != 1:
             pass
         return
-    else: 
+    else:
         # group A
         partner = cur_rank + grp_size
         # if i have a partner in group B that will notify me then wait for it before participating in doubling
@@ -721,13 +720,13 @@ def __barrier(
                 pass
 
     # Begin recursive doubling
-    rounds : tl.constexpr = tl.cast(log2(grp_size), tl.int32)
+    rounds: tl.constexpr = tl.cast(log2(grp_size), tl.int32)
     for d in range(rounds):
         peer = cur_rank ^ (1 << d)
         atomic_xchg(flags + cur_rank, 1, cur_rank, peer, heap_bases, scope="sys", sem="release")
         while tl.atomic_cas(flags + peer, 1, 0, scope="sys", sem="acquire") != 1:
             pass
-    
+
     partner = cur_rank + grp_size
     if partner < num_ranks:
         atomic_xchg(flags + cur_rank, 1, cur_rank, partner, heap_bases, scope="sys", sem="release")
