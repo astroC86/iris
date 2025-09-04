@@ -15,12 +15,11 @@ from examples.common.utils import read_realtime
 
 
 @triton.jit()
-def ping_pong(
+def load_remote(
     data,
     n_elements,
     skip,
     niter,
-    flag,
     curr_rank,
     peer_rank,
     BLOCK_SIZE: tl.constexpr,
@@ -34,25 +33,18 @@ def ping_pong(
 
     data_mask = offsets < n_elements
     time_stmp_mask = offsets < BLOCK_SIZE
-    flag_mask = offsets < 1
 
     for i in range(niter + skip):
         if i == skip:
             start = read_realtime()
             tl.store(mm_begin_timestamp_ptr + peer_rank * BLOCK_SIZE + offsets, start, time_stmp_mask)
-        first_rank = tl.minimum(curr_rank, peer_rank) if (i % 2) == 0 else tl.maximum(curr_rank, peer_rank)
-        token_first_done = i + 1
-        token_second_done = i + 2
-        if curr_rank == first_rank:
-            iris.store(data + offsets, i, curr_rank, peer_rank, heap_bases, mask=data_mask)
-            iris.atomic_xchg(flag + offsets, token_first_done, curr_rank, peer_rank, heap_bases, mask=flag_mask)
-            while tl.load(flag, cache_modifier=".cv", volatile=True) != token_second_done:
-                pass
-        else:
-            while tl.load(flag, cache_modifier=".cv", volatile=True) != token_first_done:
-                pass
-            iris.store(data + offsets, i, curr_rank, peer_rank, heap_bases, mask=data_mask)
-            iris.atomic_xchg(flag + offsets, token_second_done, curr_rank, peer_rank, heap_bases, mask=flag_mask)
+        
+        # iris.load(data + offsets, curr_rank, peer_rank,heap_bases, data_mask)
+        from_base = tl.load(heap_bases + curr_rank)
+        to_base   = tl.load(heap_bases + peer_rank)
+        offset = tl.cast(data + offsets, tl.uint64) - from_base
+        translated_ptr = tl.cast(tl.cast(to_base, tl.pointer_type(tl.int8)) + offset, (data + offsets).dtype)
+        result = tl.load(translated_ptr, mask=data_mask, cache_modifier=".cv", volatile=True)
 
     stop = read_realtime()
     tl.store(mm_end_timestamp_ptr + peer_rank * BLOCK_SIZE + offsets, stop, time_stmp_mask)
@@ -244,19 +236,17 @@ if __name__ == "__main__":
     local_latency = torch.zeros((num_ranks), dtype=torch.float32, device="cuda")
 
     source_buffer = shmem.ones(BUFFER_LEN, dtype=dtype)
-    flag = shmem.ones(1, dtype=torch.int32)
 
     grid = lambda meta: (1,)
     for source_rank in range(num_ranks):
         for destination_rank in range(num_ranks):
-            if source_rank != destination_rank and cur_rank in [source_rank, destination_rank]:
+            if cur_rank in [source_rank, destination_rank]:
                 peer_for_me = destination_rank if cur_rank == source_rank else source_rank
-                ping_pong[grid](
+                load_remote[grid](
                     source_buffer,
                     BUFFER_LEN,
                     skip,
                     niter,
-                    flag,
                     cur_rank,
                     peer_for_me,
                     BLOCK_SIZE,
