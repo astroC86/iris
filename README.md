@@ -24,13 +24,15 @@ Iris is a Triton-based framework for Remote Memory Access (RMA) operations. Iris
 
 ## Documentation
 
-1. [Programming Model](docs/PROGRAMMING_MODEL.md)
-2. [Peer-to-Peer Communication](examples/README.md)
-3. [Fine-grained GEMM & Communication Overlap](docs/FINEGRAINED_OVERLAP.md)
-4. [Setup Alternatives](docs/SETUP_ALTERNATIVES.md)
+- [API Reference](https://rocm.github.io/iris/reference/api-reference.html)
+- [Programming Model](https://rocm.github.io/iris/conceptual/programming-model.html)
+- [Examples](https://rocm.github.io/iris/reference/examples.html)
+- [Fine-grained GEMM & Communication Overlap](https://rocm.github.io/iris/conceptual/finegrained-overlap.html)
+- [Setup Alternatives](https://rocm.github.io/iris/getting-started/installation.html)
 
 ## API Example
 
+Here's a simple example showing how to perform remote memory operations between GPUs using Iris:
 
 ```python
 import torch
@@ -38,33 +40,35 @@ import triton
 import triton.language as tl
 import iris
 
-# Device-side APIs.
+# Device-side APIs
 @triton.jit
 def kernel(buffer, buffer_size: tl.constexpr, block_size: tl.constexpr, heap_bases_ptr):
-    # Compute start index of this block.
+    # Compute start index of this block
     pid = tl.program_id(0)
     block_start = pid * block_size
     offsets = block_start + tl.arange(0, block_size)
     
-    # Guard for out-of-bounds accesses.
+    # Guard for out-of-bounds accesses
     mask = offsets < buffer_size
 
-    # Store 1 in the target buffer at each offset.
+    # Store 1 in the target buffer at each offset
     source_rank = 0
     target_rank = 1
     iris.store(buffer + offsets, 1,
             source_rank, target_rank,
             heap_bases_ptr, mask=mask)
 
-# Iris symmetric heap setup.
-heap_size = 2**30
-buffer_size = 4096
-block_size = 1024
+# Iris initialization
+heap_size = 2**30   # 1GiB symmetric heap for inter-GPU communication
 iris_ctx = iris.iris(heap_size)
 cur_rank = iris_ctx.get_rank()
+
+# Iris tensor allocation
+buffer_size = 4096  # 4K elements buffer
 buffer = iris_ctx.zeros(buffer_size, device="cuda", dtype=torch.float32)
 
-# Launch the kernel on source_rank.
+# Launch the kernel on rank 0
+block_size = 1024
 grid = lambda meta: (triton.cdiv(buffer_size, meta["block_size"]),)
 source_rank = 0
 if cur_rank == source_rank:
@@ -75,7 +79,7 @@ if cur_rank == source_rank:
         iris_ctx.get_heap_bases(),
     )
 
-# Synchronize all ranks.
+# Synchronize all ranks
 iris_ctx.barrier()
 ```
 
@@ -94,7 +98,7 @@ docker attach iris-dev
 cd iris && pip install -e .
 ```
 
-For manual Docker or Apptainer setup, see [setup alternatives](docs/SETUP_ALTERNATIVES.md).
+For manual Docker or Apptainer setup, see [setup alternatives](https://rocm.github.io/iris/getting-started/installation.html).
 
 ## Next Steps
 
