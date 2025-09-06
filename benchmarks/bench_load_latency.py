@@ -38,10 +38,10 @@ def load_remote(
         if i == skip:
             start = read_realtime()
             tl.store(mm_begin_timestamp_ptr + peer_rank * BLOCK_SIZE + offsets, start, time_stmp_mask)
-        
+
         # iris.load(data + offsets, curr_rank, peer_rank,heap_bases, data_mask)
         from_base = tl.load(heap_bases + curr_rank)
-        to_base   = tl.load(heap_bases + peer_rank)
+        to_base = tl.load(heap_bases + peer_rank)
         offset = tl.cast(data + offsets, tl.uint64) - from_base
         translated_ptr = tl.cast(tl.cast(to_base, tl.pointer_type(tl.int8)) + offset, (data + offsets).dtype)
         result = tl.load(translated_ptr, mask=data_mask, cache_modifier=".cv", volatile=True)
@@ -240,15 +240,14 @@ if __name__ == "__main__":
     grid = lambda meta: (1,)
     for source_rank in range(num_ranks):
         for destination_rank in range(num_ranks):
-            if cur_rank in [source_rank, destination_rank]:
-                peer_for_me = destination_rank if cur_rank == source_rank else source_rank
+            if cur_rank == source_rank:
                 load_remote[grid](
                     source_buffer,
                     BUFFER_LEN,
                     skip,
                     niter,
                     cur_rank,
-                    peer_for_me,
+                    destination_rank,
                     BLOCK_SIZE,
                     heap_bases,
                     mm_begin_timestamp,
@@ -258,10 +257,13 @@ if __name__ == "__main__":
 
     mm_begin_cpu = mm_begin_timestamp.cpu().numpy()
     mm_end_cpu = mm_end_timestamp.cpu().numpy()
+
+    gpu_freq = iris.hip.get_wall_clock_rate(cur_rank)
+
     for destination_rank in range(num_ranks):
         delta = mm_end_cpu[destination_rank, :] - mm_begin_cpu[destination_rank, :]
-        avg_ns = float(delta.sum() / max(1, delta.size) / max(1, niter))
-        local_latency[destination_rank] = avg_ns
+        avg_cc = float(delta.sum() / max(1, delta.size) / max(1, niter))
+        local_latency[destination_rank] = avg_cc * 1e6 / gpu_freq
 
     latency_matrix = mpi_allgather(local_latency.cpu())
 
