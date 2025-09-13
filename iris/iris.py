@@ -22,7 +22,6 @@ Example:
     >>> tensor = ctx.zeros(1024, 1024, dtype=torch.float32)
 """
 
-from iris.util import trap_if
 import triton
 import triton.language as tl
 
@@ -1540,6 +1539,7 @@ def copy(src_ptr, dst_ptr, from_rank, to_rank, cur_rank, heap_bases, mask=None):
     space to the to_rank's address space, performing a masked load from the translated
     source, and storing the loaded data to dst_ptr in the to_rank memory location.
     If from_rank and to_rank are the same, this function performs a local copy operation.
+    It is undefined behaviour if neither from_rank nor to_rank is the cur_rank.
 
     Args:
         src_ptr (triton.PointerType, or block of dtype=triton.PointerType): Pointer in the from_rank's local memory from which to read data.
@@ -1551,9 +1551,14 @@ def copy(src_ptr, dst_ptr, from_rank, to_rank, cur_rank, heap_bases, mask=None):
 
     Returns:
         None
-    """
 
-    trap_if((cur_rank != from_rank) and (cur_rank != to_rank))
+    Example:
+        >>> @triton.jit
+        >>> def kernel(remote_ptr, local_ptr, heap_bases):
+        >>>     from_rank = 1
+        >>>     to_rank = 0
+        >>>     iris.copy(remote_ptr, local_ptr, from_rank, to_rank, to_rank, heap_bases)
+    """
 
     cur_base  = tl.load(heap_bases + cur_rank)
 

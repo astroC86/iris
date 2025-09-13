@@ -142,24 +142,3 @@ def do_bench(
 
     times = [s.elapsed_time(e) for s, e in zip(start_event, end_event)]
     return _summarize_statistics(times, quantiles, return_mode)
-
-
-@triton.jit
-def trap_if(cond):
-    drv = tl.zeros([1], dtype=tl.uint32)
-    cond_u32 = tl.where(cond, drv, drv + 1)
-    if tl.program_id(0) == 0:
-        tl.inline_asm_elementwise(
-            asm="""
-                    s_cmp_lg_u32 $1, 0
-                    s_cbranch_scc1 0f
-                    s_trap 2
-                0:
-                """,
-                constraints="=v,s",
-                args=[cond_u32],
-                dtype=tl.uint32,
-                is_pure=False,
-                pack=1,
-            )
-        
