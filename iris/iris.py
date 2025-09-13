@@ -22,6 +22,7 @@ Example:
     >>> tensor = ctx.zeros(1024, 1024, dtype=torch.float32)
 """
 
+from iris.util import trap_if
 import triton
 import triton.language as tl
 
@@ -1532,7 +1533,7 @@ def store(pointer, value, from_rank, to_rank, heap_bases, mask=None):
 
 
 @triton.jit
-def copy(src_ptr, dst_ptr, from_rank, to_rank, heap_bases, mask=None):
+def copy(src_ptr, dst_ptr, from_rank, to_rank, cur_rank, heap_bases, mask=None):
     """
     Copies data from the specified rank's memory into the destination rank's memory.
     This function performs the transfer by translating src_ptr from the from_rank's address
@@ -1547,6 +1548,51 @@ def copy(src_ptr, dst_ptr, from_rank, to_rank, heap_bases, mask=None):
         to_rank (int): The rank ID that will receive the data (destination rank).
         heap_bases (triton.PointerType): Array containing the heap base addresses for all ranks.
         mask (Block of triton.int1, optional): If mask[idx] is false, do not load from the translated src_ptr[idx] and do not store to dst_ptr[idx]. Defaults to None.
+
+    Returns:
+        None
+    """
+
+    trap_if((cur_rank != from_rank) and (cur_rank != to_rank))
+
+    cur_base  = tl.load(heap_bases + cur_rank)
+
+    from_base = tl.load(heap_bases + from_rank)
+    to_base   = tl.load(heap_bases + to_rank)
+
+    src_ptr_int = tl.cast(src_ptr, tl.uint64)
+    src_offset = src_ptr_int - cur_base
+
+    dst_ptr_int = tl.cast(dst_ptr, tl.uint64)
+    dst_offset  = dst_ptr_int - cur_base
+
+    from_base_byte = tl.cast(from_base, tl.pointer_type(tl.int8))
+    to_base_byte   = tl.cast(to_base  , tl.pointer_type(tl.int8))
+
+    translated_src = tl.cast(from_base_byte + src_offset, src_ptr.dtype)
+    translated_dst = tl.cast(to_base_byte   + dst_offset, src_ptr.dtype)
+
+    data = tl.load(translated_src, mask=mask)
+    tl.store(translated_dst, data, mask=mask)
+
+
+@triton.jit
+def get(from_ptr, to_ptr, from_rank, to_rank, heap_bases, mask=None):
+    """
+    Copies data from the specified rank's memory to the current rank's local memory.
+
+    This function performs a memory read operation by translating the from_ptr
+    from the current rank's address space to the from_rank's address space, loading data
+    from the from_rank memory location, and storing it to the local to_ptr.
+    If the from_rank is the same as the current rank, this function performs a local copy operation.
+
+    Args:
+        from_ptr (triton.PointerType, or block of dtype=triton.PointerType): Pointer in the current rank's address space that will be translated to the from_rank's address space. Must be the current rank where the pointer is local.
+        to_ptr (triton.PointerType, or block of dtype=triton.PointerType): Pointer in the current rank's local memory where the data will be stored.
+        from_rank (int): The from_rank ID from which to read the data.
+        to_rank (int): The current rank ID where the data will be stored.
+        heap_bases (triton.PointerType): Array containing the heap base addresses for all ranks.
+        mask (Block of triton.int1, optional): If mask[idx] is false, do not load the data at address from_ptr[idx] and do not store to to_ptr[idx]. Defaults to None.
 
     Returns:
         None
