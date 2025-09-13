@@ -1560,22 +1560,22 @@ def copy(src_ptr, dst_ptr, from_rank, to_rank, cur_rank, heap_bases, mask=None):
         >>>     iris.copy(remote_ptr, local_ptr, from_rank, to_rank, to_rank, heap_bases)
     """
 
-    cur_base  = tl.load(heap_bases + cur_rank)
+    cur_base = tl.load(heap_bases + cur_rank)
 
     from_base = tl.load(heap_bases + from_rank)
-    to_base   = tl.load(heap_bases + to_rank)
+    to_base = tl.load(heap_bases + to_rank)
 
     src_ptr_int = tl.cast(src_ptr, tl.uint64)
     src_offset = src_ptr_int - cur_base
 
     dst_ptr_int = tl.cast(dst_ptr, tl.uint64)
-    dst_offset  = dst_ptr_int - cur_base
+    dst_offset = dst_ptr_int - cur_base
 
     from_base_byte = tl.cast(from_base, tl.pointer_type(tl.int8))
-    to_base_byte   = tl.cast(to_base  , tl.pointer_type(tl.int8))
+    to_base_byte = tl.cast(to_base, tl.pointer_type(tl.int8))
 
     translated_src = tl.cast(from_base_byte + src_offset, src_ptr.dtype)
-    translated_dst = tl.cast(to_base_byte   + dst_offset, src_ptr.dtype)
+    translated_dst = tl.cast(to_base_byte + dst_offset, src_ptr.dtype)
 
     data = tl.load(translated_src, mask=mask)
     tl.store(translated_dst, data, mask=mask)

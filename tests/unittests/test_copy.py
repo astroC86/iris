@@ -25,7 +25,7 @@ def copy_kernel(
     for target_rank in range(num_ranks):
         src_data = data + BLOCK_SIZE * cur_rank
         dest_data = results + BLOCK_SIZE * target_rank
-        iris.copy(src_data + offsets, dest_data + offsets, target_rank, cur_rank, cur_rank,  heap_bases, mask)
+        iris.copy(src_data + offsets, dest_data + offsets, target_rank, cur_rank, cur_rank, heap_bases, mask)
 
 
 @pytest.mark.parametrize(
