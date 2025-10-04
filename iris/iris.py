@@ -1550,6 +1550,7 @@ def copy(src_ptr, dst_ptr, from_rank, to_rank, cur_rank, heap_bases, mask=None):
         dst_ptr (triton.PointerType, or block of dtype=triton.PointerType): Pointer in the to_rank's local memory where the data will be written.
         from_rank (int): The rank ID that owns src_ptr (source rank).
         to_rank (int): The rank ID that will receive the data (destination rank).
+        cur_rank (int): The rank ID issuing the copy operation. Must be either from_rank or to_rank.
         heap_bases (triton.PointerType): Array containing the heap base addresses for all ranks.
         mask (Block of triton.int1, optional): If mask[idx] is false, do not load from the translated src_ptr[idx] and do not store to dst_ptr[idx]. Defaults to None.
 
