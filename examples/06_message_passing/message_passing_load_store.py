@@ -3,11 +3,13 @@
 # Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
 
 import argparse
+import random
 
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
 import triton
 import triton.language as tl
-import random
 
 import iris
 
@@ -46,7 +48,7 @@ def producer_kernel(
     )
 
     # Set flag to signal completion
-    tl.store(flag + pid, 1)
+    iris.atomic_cas(flag + pid, 0, 1, producer_rank, consumer_rank, heap_bases_ptr, sem="release", scope="sys")
 
 
 @triton.jit
@@ -65,9 +67,11 @@ def consumer_kernel(
     mask = offsets < buffer_size
 
     # Spin-wait until writer sets flag[pid] = 1
-    done = tl.load(flag + pid)
+    done = 0
     while done == 0:
-        done = tl.load(flag + pid)
+        done = iris.atomic_cas(
+            flag + pid, 1, 0, consumer_rank, consumer_rank, heap_bases_ptr, sem="acquire", scope="sys"
+        )
 
     # Read from the target buffer (written by producer)
     values = iris.load(buffer + offsets, consumer_rank, consumer_rank, heap_bases_ptr, mask=mask)
@@ -125,13 +129,17 @@ def parse_args():
     parser.add_argument("-b", "--block_size", type=int, default=512, help="Block Size")
 
     parser.add_argument("-p", "--heap_size", type=int, default=1 << 33, help="Iris heap size")
+    parser.add_argument("-r", "--num_ranks", type=int, default=2, help="Number of ranks/processes")
 
     return vars(parser.parse_args())
 
 
-def main():
-    args = parse_args()
+def _worker(local_rank: int, world_size: int, init_url: str, args: dict):
+    """Worker function for PyTorch distributed execution."""
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    dist.init_process_group(backend=backend, init_method=init_url, world_size=world_size, rank=local_rank)
 
+    # Main benchmark logic
     shmem = iris.iris(args["heap_size"])
     dtype = torch_dtype_from_str(args["datatype"])
     cur_rank = shmem.get_rank()
@@ -139,7 +147,11 @@ def main():
 
     # Allocate source and destination buffers on the symmetric heap
     source_buffer = shmem.zeros(args["buffer_size"], device="cuda", dtype=dtype)
-    destination_buffer = shmem.randn(args["buffer_size"], device="cuda", dtype=dtype)
+    if dtype.is_floating_point:
+        destination_buffer = shmem.randn(args["buffer_size"], device="cuda", dtype=dtype)
+    else:
+        ii = torch.iinfo(dtype)
+        destination_buffer = shmem.randint(ii.min, ii.max, (args["buffer_size"],), device="cuda", dtype=dtype)
 
     if world_size != 2:
         raise ValueError("This example requires exactly two processes.")
@@ -198,6 +210,23 @@ def main():
             shmem.error("Validation failed.")
 
     shmem.barrier()
+
+    dist.barrier()
+    dist.destroy_process_group()
+
+
+def main():
+    args = parse_args()
+
+    num_ranks = args["num_ranks"]
+
+    init_url = "tcp://127.0.0.1:29500"
+    mp.spawn(
+        fn=_worker,
+        args=(num_ranks, init_url, args),
+        nprocs=num_ranks,
+        join=True,
+    )
 
 
 if __name__ == "__main__":

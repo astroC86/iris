@@ -3,15 +3,19 @@
 # Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
 
 import argparse
+import json
+import random
 
+import numpy as np
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
 import triton
 import triton.language as tl
-import random
-import numpy as np
-import json
-import iris
+import sys
 
+import iris
+from examples.common.utils import torch_dtype_from_str
 
 torch.manual_seed(123)
 random.seed(123)
@@ -20,7 +24,6 @@ random.seed(123)
 @triton.jit
 def atomic_add_kernel(
     source_buffer,  # tl.tensor: pointer to source data
-    result_buffer,  # tl.tensor: pointer to result data
     buffer_size,  # int32: total number of elements
     source_rank: tl.constexpr,
     destination_rank: tl.constexpr,
@@ -41,20 +44,6 @@ def atomic_add_kernel(
     )
 
 
-def torch_dtype_from_str(datatype: str) -> torch.dtype:
-    dtype_map = {
-        "fp16": torch.float16,
-        "fp32": torch.float32,
-        "int8": torch.int8,
-        "bf16": torch.bfloat16,
-    }
-    try:
-        return dtype_map[datatype]
-    except KeyError:
-        print(f"Unknown datatype: {datatype}")
-        exit(1)
-
-
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Parse Message Passing configuration.",
@@ -65,24 +54,24 @@ def parse_args():
         "--datatype",
         type=str,
         default="fp16",
-        choices=["fp16", "fp32", "int8", "bf16"],
+        choices=["fp16", "fp32", "bf16", "int32", "int64"],
         help="Datatype of computation",
     )
     parser.add_argument("-z", "--buffer_size", type=int, default=1 << 32, help="Buffer Size")
     parser.add_argument("-b", "--block_size", type=int, default=512, help="Block Size")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
     parser.add_argument("-d", "--validate", action="store_true", help="Enable validation output")
-
     parser.add_argument("-p", "--heap_size", type=int, default=1 << 33, help="Iris heap size")
     parser.add_argument("-o", "--output_file", type=str, default="", help="Output file")
 
     parser.add_argument("-x", "--num_experiments", type=int, default=16, help="Number of experiments")
     parser.add_argument("-w", "--num_warmup", type=int, default=4, help="Number of warmup experiments")
+    parser.add_argument("-r", "--num_ranks", type=int, default=2, help="Number of ranks/processes")
 
     return vars(parser.parse_args())
 
 
-def run_experiment(shmem, args, source_rank, destination_rank, source_buffer, result_buffer):
+def run_experiment(shmem, args, source_rank, destination_rank, source_buffer):
     dtype = torch_dtype_from_str(args["datatype"])
     cur_rank = shmem.get_rank()
     world_size = shmem.get_num_ranks()
@@ -105,7 +94,6 @@ def run_experiment(shmem, args, source_rank, destination_rank, source_buffer, re
         if cur_rank == source_rank:
             atomic_add_kernel[grid](
                 source_buffer,
-                result_buffer,
                 n_elements,
                 source_rank,
                 destination_rank,
@@ -113,11 +101,18 @@ def run_experiment(shmem, args, source_rank, destination_rank, source_buffer, re
                 shmem.get_heap_bases(),
             )
 
+    def preamble():
+        source_buffer.fill_(0)
+
     # Warmup
     run_atomic_add()
     shmem.barrier()
     atomic_add_ms = iris.do_bench(
-        run_atomic_add, shmem.barrier, n_repeat=args["num_experiments"], n_warmup=args["num_warmup"]
+        run_atomic_add,
+        barrier_fn=shmem.barrier,
+        preamble_fn=preamble,
+        n_repeat=args["num_experiments"],
+        n_warmup=args["num_warmup"],
     )
 
     # Subtract overhead
@@ -140,28 +135,34 @@ def run_experiment(shmem, args, source_rank, destination_rank, source_buffer, re
         if args["verbose"]:
             shmem.info("Validating output...")
 
-        expected = torch.arange(n_elements, dtype=dtype, device="cuda")
-        diff_mask = ~torch.isclose(result_buffer, expected, atol=1)
-        breaking_indices = torch.nonzero(diff_mask, as_tuple=False)
+        expected = torch.ones(n_elements, dtype=dtype, device="cuda")
 
-        if not torch.allclose(result_buffer, expected, atol=1):
-            max_diff = (result_buffer - expected).abs().max().item()
+        diff_mask = ~torch.isclose(source_buffer, expected)
+
+        if torch.any(diff_mask):
+            max_diff = (source_buffer - expected).abs().max().item()
             shmem.info(f"Max absolute difference: {max_diff}")
-            for idx in breaking_indices:
-                idx = tuple(idx.tolist())
-                computed_val = result_buffer[idx]
-                expected_val = expected[idx]
-                shmem.error(f"Mismatch at index {idx}: C={computed_val}, expected={expected_val}")
-                success = False
-                break
+
+            first_mismatch_idx = torch.argmax(diff_mask.float()).item()
+            computed_val = source_buffer[first_mismatch_idx]
+            expected_val = expected[first_mismatch_idx]
+            shmem.error(f"First mismatch at index {first_mismatch_idx}: C={computed_val}, expected={expected_val}")
+            success = False
 
         if success and args["verbose"]:
             shmem.info("Validation successful.")
         if not success and args["verbose"]:
             shmem.error("Validation failed.")
 
+    success = shmem.broadcast(success, source_rank)
+
     shmem.barrier()
-    return bandwidth_gbps
+
+    if not success:
+        dist.destroy_process_group()
+        sys.exit(1)
+
+    return bandwidth_gbps, source_buffer.clone()
 
 
 def print_bandwidth_matrix(
@@ -202,9 +203,12 @@ def print_bandwidth_matrix(
             raise ValueError(f"Unsupported output file extension: {output_file}")
 
 
-def main():
-    args = parse_args()
+def _worker(local_rank: int, world_size: int, init_url: str, args: dict):
+    """Worker function for PyTorch distributed execution."""
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    dist.init_process_group(backend=backend, init_method=init_url, world_size=world_size, rank=local_rank)
 
+    # Main benchmark logic
     shmem = iris.iris(args["heap_size"])
     num_ranks = shmem.get_num_ranks()
     bandwidth_matrix = np.zeros((num_ranks, num_ranks), dtype=np.float32)
@@ -212,16 +216,32 @@ def main():
     dtype = torch_dtype_from_str(args["datatype"])
     element_size_bytes = torch.tensor([], dtype=dtype).element_size()
     source_buffer = shmem.arange(args["buffer_size"] // element_size_bytes, device="cuda", dtype=dtype)
-    result_buffer = shmem.zeros_like(source_buffer)
 
     for source_rank in range(num_ranks):
         for destination_rank in range(num_ranks):
-            bandwidth_gbps = run_experiment(shmem, args, source_rank, destination_rank, source_buffer, result_buffer)
+            bandwidth_gbps, _ = run_experiment(shmem, args, source_rank, destination_rank, source_buffer)
             bandwidth_matrix[source_rank, destination_rank] = bandwidth_gbps
             shmem.barrier()
 
     if shmem.get_rank() == 0:
         print_bandwidth_matrix(bandwidth_matrix, output_file=args["output_file"])
+
+    dist.barrier()
+    dist.destroy_process_group()
+
+
+def main():
+    args = parse_args()
+
+    num_ranks = args["num_ranks"]
+
+    init_url = "tcp://127.0.0.1:29500"
+    mp.spawn(
+        fn=_worker,
+        args=(num_ranks, init_url, args),
+        nprocs=num_ranks,
+        join=True,
+    )
 
 
 if __name__ == "__main__":
