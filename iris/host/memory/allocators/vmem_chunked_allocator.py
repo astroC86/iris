@@ -283,19 +283,27 @@ class VMemChunkedAllocator(BaseAllocator):
 
     def reuse(self, offsets) -> None:
         """
-        Make released blocks reusable. Call only via SymmetricHeap.collect(), which passes the same
-        offsets on every rank: those every rank has released. That keeps the free lists, and every
-        later offset, identical across ranks.
+        Make released blocks reusable, and return every free block at the top of the heap (released
+        this round or earlier) to the bump pointer. Call only via SymmetricHeap.collect(), which
+        passes the same offsets on every rank: those every rank has released. That keeps the free
+        lists, and every later offset, identical across ranks.
         """
         with self.lock:
             self._bytes_since_collect = 0
-            offsets = sorted(offsets)
+            candidates = {offset: self._released.pop(offset) for offset in offsets}
+            # Blocks freed in earlier rounds can reach the top once the blocks above them are freed
+            for size_class, free in self.free_lists.items():
+                candidates.update((offset, size_class) for offset in free)
+                free.clear()
             # Blocks at the top of the bump region go back to the bump pointer, not a size class
-            while offsets and offsets[-1] + self._released[offsets[-1]] == self.bump:
-                self.bump = offsets[-1]
-                del self._released[offsets.pop()]
-            for offset in offsets:
-                self.free_lists[self._released.pop(offset)].append(offset)
+            by_end = {offset + size: offset for offset, size in candidates.items()}
+            while self.bump in by_end:
+                self.bump = by_end.pop(self.bump)
+                del candidates[self.bump]
+            # Highest offset first, so pop() hands out the lowest blocks and keeps those near the top
+            # free for later rollbacks
+            for offset in sorted(candidates, reverse=True):
+                self.free_lists[candidates[offset]].append(offset)
 
     def _free_callback(self, offset, size_class):
         """Called by weakref finalizer when a tensor's storage is GC'd.
