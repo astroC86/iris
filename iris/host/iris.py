@@ -337,6 +337,7 @@ class Iris:
 
         This method automatically detects the type of value and uses the appropriate
         broadcast mechanism:
+
         - For tensors and arrays: uses efficient PyTorch distributed tensor collectives
         - For scalars and other objects: uses object broadcast
 
@@ -1008,8 +1009,19 @@ class Iris:
         """
         return self.heap_bases
 
-    def get_copy_engine_ctx(self) -> torch.Tensor | None:
-        """Return the device copy-engine context, or None when copy engines are disabled."""
+    def get_copy_engine_ctx(self) -> "torch.Tensor | None":
+        """
+        Get the device-side copy engine context for SDMA operations.
+
+        The returned tensor holds the per-rank SDMA queue, read and write pointer,
+        and doorbell addresses that device-side kernels need in order to enqueue
+        copy packets. Pass it to ``iris.put`` as ``copy_engine_ctx`` when driving
+        the copy engine from inside a kernel.
+
+        Returns:
+            torch.Tensor: The copy engine device context, or ``None`` when Iris was
+            not initialized with ``engines=("sdma",)``.
+        """
         return self.copy_engines_device_ctx
 
     @staticmethod
@@ -1065,6 +1077,7 @@ class Iris:
         Requires initialization with ``engines=("sdma",)``.
 
         Supports:
+
         - Simple copy: put(src, to_rank)
         - Copy + signal: put(src, to_rank, signal_flag=flag)
         - Wait + copy: put(src, to_rank, wait_flag=flag, wait_value=N)
@@ -1573,7 +1586,7 @@ class Iris:
         Collective Communication Library (CCL) interface for Iris.
 
         Provides collective operations that can be called as methods on the Iris instance.
-        Example usage:
+        Example:
             >>> ctx = iris.iris()
             >>> ctx.ccl.all_to_all(output_tensor, input_tensor)
         """
