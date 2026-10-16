@@ -35,8 +35,9 @@ except ImportError:
     "M, N, block_size_m, block_size_n",
     [
         # block_size_n must be a multiple of (threads_per_warp * num_warps).
-        # With defaults (threads_per_warp=64, num_warps=4), minimum is 256.
-        # elems_per_thread = block_size_n / 256: higher = wider vector loads.
+        # With num_warps=4 the minimum is 256 on a 64-wide wavefront, 128 on a 32-wide one.
+        # elems_per_thread = block_size_n / (threads_per_warp * num_warps): higher = wider
+        # vector loads. The per-case counts below are for a 64-wide wavefront; double them at 32.
         (256, 256, 32, 256),  # Small: elems_per_thread=1 (scalar loads)
         (1024, 512, 32, 512),  # Medium: elems_per_thread=2 (dword loads)
         (8192, 8192, 32, 1024),  # Large: elems_per_thread=4 (dwordx4, optimal)
