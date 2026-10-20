@@ -3,10 +3,8 @@
 # Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
 
 import argparse
-import json
 import os
 import random
-import sys
 
 import torch
 import torch.distributed as dist
@@ -38,7 +36,7 @@ def parse_args():
         "--datatype",
         type=str,
         default="fp16",
-        choices=["fp16", "fp32", "int8", "bf16"],
+        choices=["fp16", "fp32", "bf16"],
         help="Datatype of computation",
     )
     parser.add_argument(
@@ -51,8 +49,14 @@ def parse_args():
     parser.add_argument("--BLK_N", type=int, default=64, help="Block size N")
     parser.add_argument("--BLK_K", type=int, default=64, help="Block size K")
     parser.add_argument("--gsize_m", type=int, default=6, help="L2-cache locality swizzle parameter")
+    parser.add_argument("--num_stages", type=int, default=2, help="Number of stages")
     parser.add_argument("--heap_size", type=int, default=1 << 33, help="Iris heap size")
-    parser.add_argument("--gemm_sms", type=int, default=304, help="Number of SMs for persistent GEMM algorithm")
+    parser.add_argument(
+        "--gemm_sms",
+        type=int,
+        default=None,
+        help="Number of SMs for persistent GEMM algorithm (default: auto-detected)",
+    )
     parser.add_argument("-r", "--num_ranks", type=int, default=2, help="Number of ranks/processes")
 
     return vars(parser.parse_args())
@@ -61,13 +65,24 @@ def parse_args():
 def _worker(local_rank: int, world_size: int, init_url: str, args: dict):
     """Worker function for PyTorch distributed execution."""
     backend = "nccl" if torch.cuda.is_available() else "gloo"
-    dist.init_process_group(backend=backend, init_method=init_url, world_size=world_size, rank=local_rank)
+    dist.init_process_group(
+        backend=backend,
+        init_method=init_url,
+        world_size=world_size,
+        rank=local_rank,
+        device_id=torch.device(f"cuda:{local_rank}"),
+    )
 
     # Main benchmark logic
     shmem = iris.iris(args["heap_size"])
     rank = shmem.get_rank()
     world_size = shmem.get_num_ranks()
-    cu_count = shmem.get_cu_count()
+
+    # Set default SM values if not provided
+    if args["gemm_sms"] is None:
+        # For all_scatter: use total CU count
+        cu_count = torch.cuda.get_device_properties(rank).multi_processor_count
+        args["gemm_sms"] = cu_count
 
     # GEMM
     datatype = torch.float32
@@ -75,8 +90,6 @@ def _worker(local_rank: int, world_size: int, init_url: str, args: dict):
         datatype = torch.float16
     elif args["datatype"] == "fp32":
         datatype = torch.float32
-    elif args["datatype"] == "int8":
-        datatype = torch.int8
     elif args["datatype"] == "bf16":
         datatype = torch.bfloat16
     else:
@@ -157,6 +170,7 @@ def _worker(local_rank: int, world_size: int, init_url: str, args: dict):
                 args["BLK_N"],
                 args["BLK_K"],
                 args["gsize_m"],
+                args["num_stages"],
                 shmem.get_heap_bases(),
                 "gfx942",
                 args["trace_tiles"],
@@ -248,18 +262,27 @@ def _worker(local_rank: int, world_size: int, init_url: str, args: dict):
 
 
 def main():
+    print("Starting GEMM all_scatter benchmark...")
     args = parse_args()
 
-    # Use command line argument if provided, otherwise use num_ranks parameter
-    num_ranks = args["num_ranks"]
-
-    init_url = "tcp://127.0.0.1:29500"
-    mp.spawn(
-        fn=_worker,
-        args=(num_ranks, init_url, args),
-        nprocs=num_ranks,
-        join=True,
-    )
+    # Check if running with torchrun (detected by environment variables)
+    if "RANK" in os.environ and "LOCAL_RANK" in os.environ:
+        # torchrun handles process spawning, so call _worker directly
+        print("Detected torchrun execution mode")
+        rank = int(os.environ.get("RANK", 0))
+        world_size = int(os.environ.get("WORLD_SIZE", 1))
+        init_url = os.environ.get("MASTER_ADDR", "127.0.0.1") + ":" + os.environ.get("MASTER_PORT", "29500")
+        _worker(rank, world_size, f"tcp://{init_url}", args)
+    else:
+        # Use multiprocessing spawn for backward compatibility
+        num_ranks = args["num_ranks"]
+        init_url = "tcp://127.0.0.1:29500"
+        mp.spawn(
+            fn=_worker,
+            args=(num_ranks, init_url, args),
+            nprocs=num_ranks,
+            join=True,
+        )
 
 
 if __name__ == "__main__":

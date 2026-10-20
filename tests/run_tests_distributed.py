@@ -3,102 +3,91 @@
 # Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
 
 """
-Simple wrapper to run pytest tests within a single distributed process group.
-This avoids the overhead of creating/destroying process groups for each test case.
+Launcher/worker script for running pytest tests under torchrun.
+
+Direct usage:
+    python tests/run_tests_distributed.py tests/unittests/ --num_ranks 4 -v
+
+Worker usage (invoked automatically by torchrun):
+    torchrun --nproc_per_node=4 tests/run_tests_distributed.py tests/unittests/ -v
 """
 
-import sys
-import subprocess
-import torch.multiprocessing as mp
-import torch.distributed as dist
-import socket
+from __future__ import annotations
+
+import argparse
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 
-def _find_free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
+def _running_under_torchrun() -> bool:
+    return "RANK" in os.environ and "WORLD_SIZE" in os.environ
 
 
-def _distributed_worker(rank, world_size, test_file, pytest_args):
-    """Worker function that runs pytest within a distributed process group."""
-    # Initialize distributed once for all tests
-    init_method = "tcp://127.0.0.1:12355"
+def _parse_launcher_args(argv: list[str]) -> tuple[int, list[str]]:
+    parser = argparse.ArgumentParser(description="Run pytest tests under torchrun.")
+    parser.add_argument("--num_ranks", type=int, required=True, help="Number of torchrun processes to launch.")
+    args, pytest_args = parser.parse_known_args(argv)
+
+    if args.num_ranks < 1:
+        parser.error("--num_ranks must be at least 1")
+    if not pytest_args:
+        parser.error("At least one pytest path or argument is required")
+
+    return args.num_ranks, pytest_args
+
+
+def _launch_torchrun(argv: list[str]) -> int:
+    num_ranks, pytest_args = _parse_launcher_args(argv)
+    script_path = str(Path(__file__).resolve())
+    launch_cmd = [
+        sys.executable,
+        "-m",
+        "torch.distributed.run",
+        "--rdzv-backend=c10d",
+        "--rdzv-endpoint=localhost:0",
+        "--nnodes=1",
+        f"--nproc_per_node={num_ranks}",
+        script_path,
+        *pytest_args,
+    ]
+    return subprocess.run(launch_cmd, check=False).returncode
+
+
+def _run_pytest_worker(pytest_args: list[str]) -> int:
+    os.environ.setdefault("HSA_NO_SCRATCH_RECLAIM", "1")
+
+    import pytest
+    import torch
+    import torch.distributed as dist
+
+    rank = int(os.environ.get("RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+
     dist.init_process_group(
         backend="nccl",
-        init_method=init_method,
         rank=rank,
         world_size=world_size,
+        device_id=torch.device(f"cuda:{local_rank}") if torch.cuda.is_available() else None,
     )
 
     try:
-        # Import and run pytest directly
-        import pytest
-        import sys
-
-        # Set up sys.argv for pytest
-        original_argv = sys.argv[:]
-        sys.argv = ["pytest", test_file] + pytest_args
-
-        try:
-            # Run pytest directly in this process
-            exit_code = pytest.main([test_file] + pytest_args)
-            # If tests failed, exit with the failure code
-            if exit_code != 0:
-                sys.exit(exit_code)
-            return exit_code
-        finally:
-            # Restore original argv
-            sys.argv = original_argv
-
+        return pytest.main(pytest_args)
     finally:
         if dist.is_initialized():
             dist.destroy_process_group()
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python run_tests_distributed.py [--num_ranks N] [pytest_args...] <test_file>")
-        sys.exit(1)
-
-    # Get number of ranks from args or default to 2
-    num_ranks = 2
-    args = sys.argv[1:]
-
-    if "--num_ranks" in args:
-        idx = args.index("--num_ranks")
-        if idx + 1 < len(args):
-            num_ranks = int(args[idx + 1])
-            # Remove --num_ranks and its value from args
-            args = args[:idx] + args[idx + 2 :]
-
-    # The test file is the first argument after --num_ranks, everything else is pytest args
-    if not args:
-        print("Error: No test file specified")
-        sys.exit(1)
-
-    test_file = args[0]
-    pytest_args = args[1:]  # Everything after the test file
-
-    print(f"Running {test_file} with {num_ranks} ranks")
-    print(f"args={args}, test_file={test_file}, pytest_args={pytest_args}")
-
-    # Run all tests within a single distributed process group
-    try:
-        mp.spawn(
-            _distributed_worker,
-            args=(num_ranks, test_file, pytest_args),
-            nprocs=num_ranks,
-            join=True,
-        )
-    except SystemExit as e:
-        # Catch sys.exit() from worker and return same exit code
-        sys.exit(e.code if isinstance(e.code, int) else 1)
-    except Exception:
-        # Any other unhandled exception = failure
-        sys.exit(1)
+def main() -> int:
+    if _running_under_torchrun():
+        return _run_pytest_worker(sys.argv[1:])
+    return _launch_torchrun(sys.argv[1:])
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

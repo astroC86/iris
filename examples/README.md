@@ -19,11 +19,21 @@ This directory contains various algorithm implementations for distributed comput
 
 ### GEMM Operations
 - [`07_gemm_all_scatter`](07_gemm_all_scatter): Matrix multiplication with all-scatter communication
-- [`08_gemm_atomics_all_reduce`](08_gemm_atomics_all_reduce): Matrix multiplication with all-reduce using atomics
+- [`08_gemm_all_reduce_atomics`](08_gemm_all_reduce_atomics): Matrix multiplication with all-reduce using atomics
 - [`09_gemm_one_shot_all_reduce`](09_gemm_one_shot_all_reduce): Matrix multiplication with one-shot all-reduce
 - [`10_gemm_all_scatter_wg_specialization`](10_gemm_all_scatter_wg_specialization): Matrix multiplication with all-scatter using workgroup specialization
 - [`11_gemm_all_scatter_producer_consumer`](11_gemm_all_scatter_producer_consumer): Matrix multiplication with all-scatter using producer-consumer concurrent kernels
 - [`12_gemm_all_scatter_bulk_synchronous`](12_gemm_all_scatter_bulk_synchronous): Matrix multiplication with all-scatter using the bulk synchronous parallel approach
+- [`13_flash_decode`](13_flash_decode): Fused Flash Decode Attention for accelerating LLM inference
+- [`14_all_gather_gemm`](14_all_gather_gemm): Fused All-Gather + GEMM with Pull and Push models
+- [`15_gemm_all_reduce_ring_based`](15_gemm_all_reduce_ring_based): Matrix multiplication with ring-based all-reduce
+- [`16_all_reduce_ring_based`](16_all_reduce_ring_based): Ring-based all-reduce operation
+- [`20_gemm_all_scatter_independent`](20_gemm_all_scatter_independent): Independent GEMM and all-scatter operations with support for CSV input configurations
+- [`21_gemm_one_shot_all_reduce_independent`](21_gemm_one_shot_all_reduce_independent): Independent GEMM and all-reduce operations with support for CSV input configurations and selective execution
+- [`33_jacobi`](33_jacobi): Multi-GPU Jacobi iteration with Iris halo exchange and convergence reduction
+
+### Collective Communication Library
+- [`ccl`](ccl): iris-ccl collective communication operations (all-to-all, etc.)
 
 ### Utilities
 - [`benchmark`](benchmark): Benchmarking utilities and performance testing tools
@@ -56,7 +66,7 @@ python examples/06_message_passing/message_passing_load_store.py --num_ranks 8
 python examples/07_gemm_all_scatter/benchmark.py --benchmark --validate --num_ranks 8
 
 # Example command to run benchmark with all-reduce algorithm
-python examples/08_gemm_atomics_all_reduce/benchmark.py --benchmark --validate --num_ranks 8
+python examples/08_gemm_all_reduce_atomics/benchmark.py --benchmark --validate --num_ranks 8
 
 # Example command to run benchmark with one-shot all-reduce algorithm
 python examples/09_gemm_one_shot_all_reduce/benchmark.py --benchmark --validate --num_ranks 8
@@ -69,4 +79,59 @@ python examples/11_gemm_all_scatter_producer_consumer/benchmark.py --benchmark -
 
 # Example command to run benchmark with all-scatter bulk synchronous approach
 python examples/12_gemm_all_scatter_bulk_synchronous/benchmark.py --benchmark --validate --num_ranks 8
+
+# Flash Decode Attention - simple example run
+python examples/13_flash_decode/example_run.py --num_ranks 8
+
+# All-Gather + GEMM - Pull model
+python examples/14_all_gather_gemm/example_run_pull.py --num_ranks 8
+
+# All-Gather + GEMM - Push model
+python examples/14_all_gather_gemm/example_run_push.py --num_ranks 8
+
+# Example command to run benchmark with ring-based all-reduce for GEMM
+python examples/15_gemm_all_reduce_ring_based/benchmark.py --benchmark --validate --num_ranks 8
+
+# Example command to run benchmark with ring-based all-reduce
+python examples/16_all_reduce_ring_based/benchmark.py --benchmark --validate --num_ranks 8
+
+# Independent GEMM and all-scatter - single configuration
+python examples/20_gemm_all_scatter_independent/benchmark.py --benchmark --validate --num_ranks 8
+
+# Independent GEMM and all-scatter - sweep with CSV configurations
+python examples/20_gemm_all_scatter_independent/benchmark.py --benchmark --validate --num_ranks 8 --csv dataset/gemm_config.csv
+
+# Independent GEMM and all-reduce - run both operations
+python examples/21_gemm_one_shot_all_reduce_independent/benchmark.py --benchmark --validate --num_ranks 8
+
+# Independent GEMM and all-reduce - run only GEMM
+python examples/21_gemm_one_shot_all_reduce_independent/benchmark.py --only_gemm --validate --num_ranks 8
+
+# Independent GEMM and all-reduce - run only all-reduce
+python examples/21_gemm_one_shot_all_reduce_independent/benchmark.py --only_comm --validate --num_ranks 8
+
+# Independent GEMM and all-reduce - sweep with CSV configurations
+python examples/21_gemm_one_shot_all_reduce_independent/benchmark.py --benchmark --num_ranks 8 --csv examples/21_gemm_one_shot_all_reduce_independent/example_config.csv
+
+# All-to-all collective communication
+python examples/ccl/benchmark.py --benchmark --validate -m 1024 -n 512 -r 8 --datatype fp32
+```
+
+### CSV Configuration Format
+
+**Note:** Only examples 20 and 21 support loading multiple configurations from a CSV file using the `--csv` argument.
+
+**Example 20 CSV format:**
+```csv
+m,n,k,datatype,blk_m,blk_n,blk_k,gemm_sms,comm_sms
+8192,4608,36864,fp16,256,64,64,256,48
+8192,4096,12288,fp32,256,128,64,256,48
+4096,4096,8192,bf16,128,128,64,240,56
+```
+
+**Example 21 CSV format:**
+```csv
+m,n,k,datatype,blk_m,blk_n,blk_k,gemm_sms,comm_sms
+8192,4608,36864,fp16,256,64,64,256,48
+4096,4096,12288,fp32,128,128,64,240,56
 ```

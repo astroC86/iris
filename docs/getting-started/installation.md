@@ -25,6 +25,13 @@ Iris has minimal dependencies including Python, PyTorch, ROCm HIP runtime, and T
 
 **Note**: These versions represent the minimum working configuration. Using different versions may cause compatibility issues.
 
+### Gluon Backend Requirements (Experimental)
+
+To use the experimental Gluon APIs, additional requirements apply:
+
+- ROCm 7.0+
+- Triton (required commit: [aafec417bded34db6308f5b3d6023daefae43905](https://github.com/triton-lang/triton/tree/aafec417bded34db6308f5b3d6023daefae43905) or later)
+
 ## Installation Methods
 ### 1. Direct Installation from Git
 
@@ -68,6 +75,8 @@ If you prefer to build and run Docker containers manually:
 pip install -e .
 ```
 
+For scheduler-managed clusters, see the [SLURM guide](slurm.md).
+
 
 ### 4. Apptainer/Singularity
 
@@ -85,9 +94,39 @@ pip install -e .
 ```
 
 
+## Optional: SDMA copy engine
+
+Shader load/store, atomics, and collectives work with the base install. The SDMA
+copy engine (`use_copy_engine=True` in device code, and host-initiated `put`,
+`put_tile`, `put_tiles`, and `quiet`) needs [rocm-xio](https://github.com/ROCm/rocm-xio),
+which is an optional extra:
+
+```shell
+pip install "iris[sdma] @ git+https://github.com/ROCm/iris.git"
+# or, from a checkout
+pip install -e ".[sdma]"
+```
+
+To add SDMA to an existing Iris install, rerun the install with the extra. If an
+older rocm-xio is already installed, run `pip uninstall rocm-xio` first: every
+rocm-xio commit has the same version number, so pip keeps the installed one.
+
+Installing rocm-xio does not turn SDMA on; see [Iris Class](../reference/host/class.md)
+for enabling it.
+
+## Selecting the AMD runtime for fabric communication
+
+When multiple ROCm versions are installed, set `LD_LIBRARY_PATH` before starting
+Python so it points to the SDK used by PyTorch. The AMD fabric driver first loads
+`libamdhip64.so` and `libamd_smi.so` through that search path, then falls back to
+system-library discovery if those names are unavailable. This prevents a stale
+system SONAME from selecting a different HIP major version alongside PyTorch's
+runtime. Mixing HIP runtimes in one process can abort during device initialization.
+
 ## Next Steps
 
 Once you have Iris running with any of these methods:
 
 - Explore the [Examples](../reference/examples.md) directory
 - Learn about the [Programming Model](../conceptual/programming-model.md)
+- For batch-scheduled environments, see [Running Iris on SLURM](slurm.md)

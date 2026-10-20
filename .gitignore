@@ -2,13 +2,17 @@
 # Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
 
 .venv/
+.pip-cache/
 _build/
 docs-repo-template-main/
 results/
 build/
 rocSHMEM/
 *.sif
+*.sif.checksum
+apptainer/images/
 .vscode/
+.idea/
 __pycache__/
 *.so
 *.json
@@ -25,6 +29,47 @@ omni*.pdf
 slurm*.out
 
 *.egg-info
+*.backup
+*.with_chunked
 
 examples/gemm/results/*
 asm/
+*.img
+
+.cache/
+.local/
+.triton/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.pyzw
+*.pyzwz
+
+!.devcontainer/devcontainer.json
+!.github/scripts/examples_config.json
+
+
+resources/
+gpucore.*
+logs/
+*.cap
+hsakmt_counters.csv
+core
+
+docker/TheRock/
+docker/rocm-systems/
+
+# IntelliKit / Copilot agent artifacts
+.intellikit
+.github/agents/skills/
+docs/benchmark-results/*.png
+
+# Local Sphinx build
+docs/.venv/
+docs/_build/

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
-# Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright (c) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 
-FROM rocm/pytorch:rocm6.3.1_ubuntu22.04_py3.10_pytorch
+FROM rocm/pytorch:rocm7.1_ubuntu24.04_py3.13_pytorch_release_2.9.1
 
 # Use bash shell for RUN commands
 SHELL ["/bin/bash", "-c"]
@@ -10,7 +10,8 @@ SHELL ["/bin/bash", "-c"]
 ENV TRITON_PATH=/opt/triton \
     ROCM_PATH=/opt/rocm \
     OMPI_MCA_mtl="^ofi" \
-    OMPI_MCA_pml="ob1"
+    OMPI_MCA_pml="ob1" \
+    HSA_NO_SCRATCH_RECLAIM=1
 
 ENV LD_LIBRARY_PATH=$ROCM_PATH/lib:$LD_LIBRARY_PATH \
     PATH="$ROCM_PATH/bin:$PATH"
@@ -19,11 +20,22 @@ ENV OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1 \
     OMPI_ALLOW_RUN_AS_ROOT=1
 
 # Install system packages
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    git wget ninja-build cmake python3-pip python3-dev build-essential && \
+# The rocm/pytorch base images ship /etc/apt/sources.list.d/rocm.list pinned to a
+# specific internal build (e.g. compute-rocm-rel-7.1 20) on compute-artifactory.amd.com.
+# Once that build is rotated out upstream the index 404s, apt-get update returns 100,
+# and the whole layer fails -- taking every downstream CI job with it. ROCm and torch
+# are already installed in the image, so nothing here needs that repo.
+RUN rm -f /etc/apt/sources.list.d/rocm.list && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    git wget ninja-build cmake python3-pip python3-dev build-essential libdwarf-dev && \
     rm -rf /var/lib/apt/lists/*
 
+RUN groupadd -r video 2>/dev/null || true && \
+    groupadd -r render 2>/dev/null || true
+
+# Make the venv writable by all
+RUN chmod -R 777 /opt/venv
 # Install Python packages with pip
 RUN pip3 install --upgrade pip && \
     pip3 install wheel jupyter
@@ -31,15 +43,19 @@ RUN pip3 install --upgrade pip && \
 # Clone and install Triton
 WORKDIR $TRITON_PATH
 RUN git clone https://github.com/triton-lang/triton.git $TRITON_PATH
-RUN git checkout dd5823453bcc7973eabadb65f9d827c43281c434
+RUN git checkout bcbcabdd0cff6539c7168299075992b2a23ff38e
 RUN pip3 install -e .
 ENV PYTHONPATH=$TRITON_PATH
 
-# Install rocprofiler-systems
+# rocSHMEM + rocshmem4py, so tests/unittests/test_rocshmem_provider.py runs
+# instead of skipping. See install_rocshmem.sh for why it is a source build and
+# why it builds for two arches.
+ENV ROCSHMEM_PREFIX=/opt/rocshmem
+COPY .github/scripts/install_rocshmem.sh /tmp/install_rocshmem.sh
+RUN ROCSHMEM_GPU_TARGETS='gfx942;gfx950' bash /tmp/install_rocshmem.sh && rm /tmp/install_rocshmem.sh
+
+# Set up workspace
 WORKDIR /workspace
-RUN wget https://github.com/ROCm/rocprofiler-systems/releases/download/rocm-6.3.1/rocprofiler-systems-install.py && \
-    python3 ./rocprofiler-systems-install.py --prefix /opt/rocprofiler-systems --rocm 6.3 && \
-    rm -f rocprofiler-systems-install.py
 
 # Create entrypoint script
 RUN echo '#!/bin/bash' > /entrypoint.sh && \

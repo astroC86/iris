@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
 
+import os
+
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import triton
 import random
-import sys
-import os
 import argparse
-import json
+import math
 
 from examples.common.utils import JSONWriter, Timestamps, is_triton_interpret_set
 from examples.common.validation import validate_gemm
@@ -39,7 +39,7 @@ def parse_args():
         "--datatype",
         type=str,
         default="fp16",
-        choices=["fp16", "fp32", "int8", "bf16"],
+        choices=["fp16", "fp32", "bf16"],
         help="Datatype of computation",
     )
     parser.add_argument(
@@ -54,9 +54,18 @@ def parse_args():
     parser.add_argument("--gsize_m", type=int, default=6, help="L2-cache locality swizzle parameter")
     parser.add_argument("--heap_size", type=int, default=1 << 33, help="Iris heap size")
     parser.add_argument(
-        "--gemm_sms", type=int, default=256, help="Number of SMs for workgroup-specialized GEMM algorithm"
+        "--gemm_sms",
+        type=int,
+        default=None,
+        help="Number of SMs for workgroup-specialized GEMM algorithm (default: auto-detected)",
     )
-    parser.add_argument("--num_sms", type=int, default=304, help="Number of total SMs for gemm + scatter kernel")
+    parser.add_argument(
+        "--num_sms",
+        type=int,
+        default=None,
+        help="Number of total SMs for gemm + scatter kernel (default: auto-detected)",
+    )
+    parser.add_argument("--num_stages", type=int, default=2, help="Number of stages")
     parser.add_argument("-r", "--num_ranks", type=int, default=2, help="Number of ranks/processes")
 
     return vars(parser.parse_args())
@@ -65,12 +74,37 @@ def parse_args():
 def _worker(local_rank: int, world_size: int, init_url: str, args: dict):
     """Worker function for PyTorch distributed execution."""
     backend = "nccl" if torch.cuda.is_available() else "gloo"
-    dist.init_process_group(backend=backend, init_method=init_url, world_size=world_size, rank=local_rank)
+    dist.init_process_group(
+        backend=backend,
+        init_method=init_url,
+        world_size=world_size,
+        rank=local_rank,
+        device_id=torch.device(f"cuda:{local_rank}"),
+    )
 
     shmem = iris.iris(args["heap_size"])
     rank = shmem.get_rank()
     world_size = shmem.get_num_ranks()
-    cu_count = shmem.get_cu_count()
+
+    # Set default SM values if not provided
+    cu_count = torch.cuda.get_device_properties(rank).multi_processor_count
+    if args["num_sms"] is None:
+        args["num_sms"] = cu_count
+    if args["gemm_sms"] is None:
+        # For wg_specialized: use next smaller power of 2
+        args["gemm_sms"] = 2 ** int(math.log2(cu_count)) if cu_count > 0 else 1
+        # The kernel launches num_sms workgroups and gives whatever is left after
+        # gemm_sms to the communication path. When the CU count is itself a power
+        # of two (256 on MI350X) that leaves nothing, so step down once.
+        if args["gemm_sms"] >= args["num_sms"]:
+            args["gemm_sms"] //= 2
+
+    if args["gemm_sms"] >= args["num_sms"]:
+        raise ValueError(
+            f"gemm_sms ({args['gemm_sms']}) must be less than num_sms ({args['num_sms']}): "
+            "workgroup specialization needs the remainder for the communication path, "
+            "and with none of it the all-scatter never runs."
+        )
 
     # GEMM
     datatype = torch.float32
@@ -78,8 +112,6 @@ def _worker(local_rank: int, world_size: int, init_url: str, args: dict):
         datatype = torch.float16
     elif args["datatype"] == "fp32":
         datatype = torch.float32
-    elif args["datatype"] == "int8":
-        datatype = torch.int8
     elif args["datatype"] == "bf16":
         datatype = torch.bfloat16
     else:
@@ -114,7 +146,7 @@ def _worker(local_rank: int, world_size: int, init_url: str, args: dict):
     total_blocks_N = triton.cdiv(args["n"], args["BLK_N"])
     total_tiles = total_blocks_M * total_blocks_N
 
-    locks = shmem.zeros((total_tiles,), device="cuda", dtype=torch.int8)
+    locks = shmem.zeros((total_tiles,), device="cuda", dtype=torch.int32)
 
     bias = None
 
@@ -135,12 +167,17 @@ def _worker(local_rank: int, world_size: int, init_url: str, args: dict):
     # Allocate Timestamps
     timestamps = Timestamps(num_tiles=total_tiles)
 
+    def preamble():
+        # Barrier 1: ensure all ranks finish previous iteration before clearing locks
+        shmem.barrier()
+        locks.zero_()
+        # Barrier 2: ensure all ranks see zeroed locks before any rank starts the kernel
+        shmem.barrier()
+
     def run_experiment():
         nonlocal local_C
         nonlocal global_C
         nonlocal kernel_timing
-
-        shmem.barrier()
 
         if args["trace_tiles"]:
             timestamps.reset()
@@ -165,6 +202,7 @@ def _worker(local_rank: int, world_size: int, init_url: str, args: dict):
                 args["BLK_N"],
                 args["BLK_K"],
                 args["gsize_m"],
+                args["num_stages"],
                 shmem.get_heap_bases(),
                 "gfx942",
                 args["trace_tiles"],
@@ -196,6 +234,16 @@ def _worker(local_rank: int, world_size: int, init_url: str, args: dict):
         kernel_timing[k]["experiments"] = 0
 
     if args["validate"]:
+        # Run a dedicated validation kernel to ensure all cross-GPU writes are fully
+        # propagated before checking results.  The warmup above may leave some
+        # iris.put stores in-flight on the xGMI interconnect; the extra
+        # preamble + run + barrier cycle guarantees all ranks have flushed their
+        # GPU caches and that rank-0 sees every scattered tile before we call
+        # validate_gemm.
+        preamble()
+        run_experiment()
+        shmem.barrier()
+
         shmem.info("Validating...")
         matmul.set_debug(True)
         # Validate global result
@@ -222,7 +270,7 @@ def _worker(local_rank: int, world_size: int, init_url: str, args: dict):
         matmul.set_debug(False)
         shmem.info("Benchmarking...")
         perf = lambda ms: 2 * args["M"] * args["N"] * args["K"] * 1e-12 / (ms * 1e-3)
-        triton_ms = iris.do_bench(run_experiment, shmem.barrier)
+        triton_ms = iris.do_bench(run_experiment, shmem.barrier, preamble)
         triton_tflops = perf(triton_ms)
         algo_string = "all_scatter"
         shmem.info(
@@ -256,15 +304,24 @@ def _worker(local_rank: int, world_size: int, init_url: str, args: dict):
 def main():
     args = parse_args()
 
-    num_ranks = args["num_ranks"]
-
-    init_url = "tcp://127.0.0.1:29500"
-    mp.spawn(
-        fn=_worker,
-        args=(num_ranks, init_url, args),
-        nprocs=num_ranks,
-        join=True,
-    )
+    # Check if running with torchrun (detected by environment variables)
+    if "RANK" in os.environ and "LOCAL_RANK" in os.environ:
+        # torchrun handles process spawning, so call _worker directly
+        print("Detected torchrun execution mode")
+        rank = int(os.environ.get("RANK", 0))
+        world_size = int(os.environ.get("WORLD_SIZE", 1))
+        init_url = os.environ.get("MASTER_ADDR", "127.0.0.1") + ":" + os.environ.get("MASTER_PORT", "29500")
+        _worker(rank, world_size, f"tcp://{init_url}", args)
+    else:
+        # Use multiprocessing spawn for backward compatibility
+        num_ranks = args["num_ranks"]
+        init_url = "tcp://127.0.0.1:29500"
+        mp.spawn(
+            fn=_worker,
+            args=(num_ranks, init_url, args),
+            nprocs=num_ranks,
+            join=True,
+        )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,76 @@
+name: Copilot Setup Steps
+
+on:
+  workflow_dispatch:
+  issue_comment:
+    types: [created, edited]
+
+jobs:
+  copilot-setup-steps:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request && contains(github.event.comment.body, '@copilot'))
+    runs-on: [self-hosted, copilot, apptainer, iris]
+
+    permissions:
+      contents: read
+      pull-requests: read
+
+    timeout-minutes: 600
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Create task venv for Copilot
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          /opt/venv/bin/python -m venv --system-site-packages .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[sdma]" --no-cache-dir
+
+      - name: Install native build dependencies
+        run: |
+          apt-get update -qq && apt-get install -y -qq libdwarf-dev libelf-dev > /dev/null
+
+      - name: Install IntelliKit Python packages
+        run: |
+          source "$GITHUB_WORKSPACE/.venv/bin/activate"
+          pip install --no-cache-dir "git+https://github.com/AMDResearch/intellikit.git#subdirectory=accordo"
+          pip install --no-cache-dir "git+https://github.com/AMDResearch/intellikit.git#subdirectory=linex"
+          pip install --no-cache-dir "git+https://github.com/AMDResearch/intellikit.git#subdirectory=metrix"
+          pip install --no-cache-dir "git+https://github.com/AMDResearch/intellikit.git#subdirectory=nexus"
+          pip install --no-cache-dir "git+https://github.com/AMDResearch/intellikit.git#subdirectory=rocm_mcp"
+          
+
+      - name: Install uv for MCP servers
+        run: |
+          source "$GITHUB_WORKSPACE/.venv/bin/activate"
+          pip install --no-cache-dir uv
+
+      - name: Clone IntelliKit for MCP servers
+        run: |
+          git clone --depth 1 https://github.com/AMDResearch/intellikit.git "$GITHUB_WORKSPACE/.intellikit"
+
+      - name: Install IntelliKit agent skills
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p .github/agents/skills
+          curl -sSL https://raw.githubusercontent.com/AMDResearch/intellikit/main/install/skills/install.sh | \
+            bash -s -- --target github --base-url https://raw.githubusercontent.com/AMDResearch/intellikit/main
+
+      - name: Make venv default for subsequent steps
+        run: |
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+          VENV_SITE_PACKAGES="$("$GITHUB_WORKSPACE/.venv/bin/python" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
+          echo "PYTHONPATH=$VENV_SITE_PACKAGES:$GITHUB_WORKSPACE${PYTHONPATH:+:$PYTHONPATH}" >> "$GITHUB_ENV"
+
+      - name: Verify ROCm and GPU visibility
+        run: |
+          echo "=== rocminfo ==="
+          rocminfo | head -50 || true
+          echo "=== rocm-smi ==="
+          rocm-smi || true

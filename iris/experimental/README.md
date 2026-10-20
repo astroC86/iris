@@ -1,0 +1,199 @@
+# Experimental allocation providers
+
+Adapters that let Iris device kernels run on memory allocated by another
+runtime. Iris device code is unchanged: `iris.store`, `load` and `copy` take
+`heap_bases` as a plain pointer argument and translate with
+
+```
+remote = peer_bases[to] + (ptr - peer_bases[local_rank])
+```
+
+so a provider's whole job is to hand Iris one `int64[num_ranks]` table per
+allocation whose `local_rank` entry is that allocation's own base.
+
+Neither provider is imported by `iris/experimental/__init__.py`, so `import
+iris` never requires either dependency.
+
+| Provider | Dependency | Scope |
+| --- | --- | --- |
+| `rocshmem_provider.py` | `rocshmem4py` | intra-node (IPC) |
+| `torch_symm_mem_provider.py` | torch only | intra-node (HIP IPC) on the default backend |
+
+## rocSHMEM provider
+
+### Installing `rocshmem4py`
+
+There is no prebuilt wheel — `rocshmem4py` is not on PyPI, not in the ROCm
+nightly wheel indexes, and the `rocm-systems` release assets are source
+tarballs. But pip builds it from source in a single command, given a rocSHMEM
+install to build against:
+
+```bash
+CMAKE_PREFIX_PATH=<rocshmem-install> pip install \
+  "rocshmem4py @ git+https://github.com/ROCm/rocm-systems.git#subdirectory=python/rocshmem"
+```
+
+Verified against a rocSHMEM 3.7.0 install: builds and installs
+`rocshmem4py-0.1.0+rocshmem3.7.0-cp312-cp312-linux_x86_64.whl` with no other
+environment set. `ROCSHMEM_HOME` is accepted as a convenience but is not
+required; `CMAKE_PREFIX_PATH` is the documented mechanism and takes precedence
+over both it and `ROCM_PATH`. It is forwarded to CMake as a cache variable
+specifically so a rocSHMEM shipped under `/opt/rocm` cannot shadow the one you
+asked for.
+
+Two properties of the result are worth knowing:
+
+- It **contains** rocSHMEM rather than depending on it at run time — rocSHMEM is
+  statically linked into the extension module, and the version records which one
+  (`0.1.0+rocshmem3.7.0`). Nothing needs to be on `LD_LIBRARY_PATH` afterwards.
+- Consequently rocSHMEM's **build options are fixed when `rocshmem4py` is
+  built**, not when it is used.
+
+The wheel is CPython-ABI-tagged (`cp312` above), so build it with the interpreter
+that will run it.
+
+CI does the same pip install from source, but from a checkout it already has
+rather than a `git+` URL — see `.github/scripts/install_rocshmem.sh`. Since it
+has to build rocSHMEM itself anyway, taking both from one checkout keeps the core
+and the bindings at the same revision; a `git+` URL would clone independently and
+could drift, which `find_package` would not catch because it only compares
+versions. If you are building both by hand, prefer the same: point
+`pip install` at your `python/rocshmem` directory rather than at the URL.
+
+### Building rocSHMEM first
+
+The bindings do not build rocSHMEM: `CMakeLists.txt` does
+`find_package(rocshmem 3.5.0 CONFIG REQUIRED)` with no `FetchContent`, so
+**rocSHMEM 3.5.0 or newer must already be installed**.
+
+**`USE_IPC` must be `ON`.** This provider gets its peer addresses from
+`rocshmem_ptr`, which returns NULL unconditionally when IPC is compiled out. The
+provider raises with that hint if every peer comes back NULL, rather than handing
+Iris a table of zeros that would become wild pointers inside a kernel. Upstream
+defaults it ON.
+
+```bash
+cmake -S "$ROCSHMEM_SRC" -B "$BUILD" -G Ninja \
+  -DCMAKE_INSTALL_PREFIX="$ROCSHMEM_HOME" \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+  -DGPU_TARGETS=gfx950 \
+  -DUSE_IPC=ON
+cmake --build "$BUILD" --parallel
+cmake --install "$BUILD"
+```
+
+If `GPU_TARGETS` is rejected as `invalid offload arch combinations: 'gfx950' and
+'gfx950:sramecc+:xnack-'`, rocSHMEM's auto-detected arch and the one
+`find_package(hip)` derives from the build host disagree; set
+`ROCSHMEM_GPU_TARGETS='gfx950:sramecc+:xnack-'` to match.
+
+### Verifying
+
+```bash
+python -c "import rocshmem4py; print(rocshmem4py.__file__)"
+python tests/run_tests_distributed.py \
+  tests/unittests/test_rocshmem_provider.py --num_ranks 2 -v
+```
+
+The tests skip rather than fail when `rocshmem4py` is absent, when fewer than 2
+ranks are present, or when peers are not directly addressable, so they are inert
+in an environment without rocSHMEM.
+
+`run_tests_distributed.py` launches `torchrun` with `--nnodes=1`, so these tests
+only ever see intra-node peers, where `rocshmem_ptr` resolves every one. The
+inter-node case -- where `rocshmem_ptr` returns NULL and
+`SymmetricAddressMap.direct` reports the peer as unreachable -- has no automated
+coverage, since it needs two nodes.
+
+### Running
+
+rocSHMEM must be initialised before the provider is constructed; the caller owns
+bootstrap and tensor lifetime:
+
+```python
+dist.init_process_group(backend="gloo")
+rocshmem4py.init_rocshmem_by_uniqueid(dist.group.WORLD)
+provider = RocshmemProvider()
+```
+
+Allocation and free are both **collective** — `rocshmem_free` is documented as
+"a collective operation and must be called by all PEs" — so every rank must make
+the same calls in the same order. That is why `free()` is explicit rather than
+driven by garbage collection: `__del__` would run at whatever moment each rank
+happened to collect, and ranks would hang instead of raising.
+
+## PyTorch symmetric memory provider
+
+### Installing
+
+Nothing to install. It uses `torch.distributed._symmetric_memory`, so the only
+requirement is a torch build whose symmetric memory can allocate.
+
+That is not a given on ROCm, and the import is not a useful test of it — the
+module imports successfully on builds where allocation then fails. Measured on
+gfx950, except the rows reported in review:
+
+| torch | backend | symmetric memory |
+| --- | --- | --- |
+| `2.10.0+rocm7.2.1` | default | works |
+| `2.13.0+rocm7.2` | default | works |
+| `2.9.1+rocm7.1` | default | no — lacks `set_signal_pad_size`, and `rendezvous` fails with `HIP error: invalid argument` |
+| `2.13.0+rocm7.15.0a` (nightly) | default | no — `hipErrorOutOfMemory` on a 4 KB allocation |
+| `2.15.0.dev20260930+rocm10.0` (nightly) | `NVSHMEM` | works, and only with this backend — standalone check, reported in review of #551 |
+| `2.13.0+rocm10.1.0a2026082` | default and `NVSHMEM` | provider tests pass on both — reported in review of #551 |
+
+So the tests probe by attempting a throwaway allocation and skip if it fails,
+rather than by importing.
+
+**The backend is the caller's choice.** The provider never calls
+`symm_mem.set_backend()`; it reads the table off whatever handle `rendezvous`
+returns. `NVSHMEM` is torch's name for rocSHMEM on ROCm. One trap if you want
+the default: on ROCm `get_backend()` reports it as `'CUDA'` (the HIP IPC path),
+but `set_backend('CUDA')` is rejected with "SymmetricMemory does not find
+allocation backend CUDA", so keep it by not calling `set_backend` at all.
+
+```python
+torch.cuda.set_device(device)
+dist.init_process_group("nccl")
+# symm_mem.set_backend("NVSHMEM")  # on builds where the default cannot allocate
+provider = TorchSymmMemProvider()
+tensor, peer_bases = provider.allocate_symmetric(n, dtype=torch.float32)
+# ... launch Iris kernels with peer_bases ...
+provider.free(tensor)
+```
+
+### Verifying
+
+```bash
+python tests/run_tests_distributed.py \
+  tests/unittests/test_torch_symm_mem_provider.py \
+  tests/unittests/test_provider_unified.py --num_ranks 2 -v
+```
+
+Passes at 2, 4 and 8 ranks on `torch 2.10.0+rocm7.2.1` with the default backend.
+`rendezvous` is collective (allocation itself is local on the default backend),
+so every rank must call `allocate_symmetric` the same number of times and in the
+same order.
+
+### How it differs from the rocSHMEM provider
+
+The rendezvous handle's `buffer_ptrs` is already the table Iris needs, with the
+local rank's entry equal to the tensor's own `data_ptr()`, so this provider does
+no pointer arithmetic — it reads the table off the handle.
+
+Peer offsets need not be shared between allocations. On the default backend each
+allocation is a separate IPC mapping rather than a window onto one linear heap,
+so a table must only translate pointers into the allocation it describes. With
+rocSHMEM, offsets are uniform across the symmetric heap and borrowing another
+allocation's table happens to work; here it can mistranslate.
+
+`symmetric_address_map` only accepts tensors this provider allocated. Rendezvous
+is collective, so deriving a handle on demand would hang whichever ranks did not
+ask; handles are recorded at allocation time instead. Describing tensors that
+were already rendezvoused outside the provider is tracked in #577.
+
+**Call `free()` when done with an allocation.** The provider records each
+allocation's rendezvous handle, and that handle keeps the memory and its peer
+mappings alive, so dropping the tensor alone releases nothing. Unlike
+rocSHMEM's, this `free()` is local rather than collective, but barrier first if
+peers may still be accessing the allocation.

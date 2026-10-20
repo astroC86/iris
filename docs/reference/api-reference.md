@@ -1,14 +1,22 @@
 # API Reference
 
-Explore Iris APIs. The reference is broken down into focused sections to mirror common workflows:
+Explore Iris APIs. The host-side API (class, tensor creation, CCL) is identical across all backends. Only the device-side API differs between Triton and Gluon.
 
-- The `Iris` class itself (constructor and helper utilities)
-- Tensor-like creation methods on the `Iris` context
-- Triton device-side functions for remote memory ops and atomics
+## Host API (All Backends)
 
-Use the links below to navigate:
+- [Iris Class](host/class.md)
+- [Tensor Creation](host/tensor-creation.md)
+- [Collective Communication (CCL)](host/ccl.md)
+- [Copy Engine (SDMA)](host/copy-engine.md)
 
-- [Iris Class (ctor & helpers)](api-iris-class.md)
-- [Tensor Creation](api-tensor-creation.md)
-- [Triton Device Functions](api-device-functions.md)
+## Triton Backend
+
+- [Overview](triton/overview.md)
+- [Device Functions](triton/device-functions.md)
+- [Fused Communication and Compute Operations](triton/ops.md)
+
+## Gluon Backend (Experimental)
+
+- [Overview](gluon/overview.md)
+- [Device Functions](gluon/device-functions.md)
 

@@ -1,35 +1,88 @@
 # SPDX-License-Identifier: MIT
-# Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright (c) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 Bootstrap: docker
-From: rocm/pytorch:rocm6.3.1_ubuntu22.04_py3.10_pytorch
+From: rocm/pytorch:rocm7.2.1_ubuntu24.04_py3.14_pytorch_2.10.0
+
+# The rocSHMEM installer is copied in rather than inlined, so it stays one
+# implementation shared with docker/Dockerfile. Caveat: container_build.sh caches
+# the image on the checksum of THIS def file only, so editing
+# install_rocshmem.sh alone reuses a stale image -- touch this file too.
+%files
+    .github/scripts/install_rocshmem.sh /opt/install_rocshmem.sh
 
 %post
     /bin/bash -c "
-    apt-get update && apt-get install -y git
-    export TRITON_PATH=/workspace/triton
-    conda env list
-    source /opt/conda/bin/activate py_3.10
-    conda install -y -n py_3.10 -c conda-forge jupyter ninja cmake wheel
-    git clone https://github.com/triton-lang/triton.git \$TRITON_PATH
+    # Fail the build on the first error. Without this a step can fail silently
+    # and still produce an image that Apptainer reports as built -- which
+    # container_build.sh then caches by def-file checksum and every later job
+    # reuses. That happened: a transient 'fetch-pack: unexpected disconnect'
+    # during the Triton clone left /opt/triton absent, so the pinned checkout and
+    # its editable install never ran, 'import triton' silently fell back to the
+    # older pytorch-triton-rocm in site-packages, and every Triton test failed
+    # far downstream with an unrelated-looking error.
+    set -e
+
+    # Set environment variables
+    export TRITON_PATH=/opt/triton
+    export ROCM_PATH=/opt/rocm
+    export LD_LIBRARY_PATH=\$ROCM_PATH/lib:\$LD_LIBRARY_PATH
+    export PATH=\"\$ROCM_PATH/bin:\$PATH\"
+
+    # Install system packages
+    # see docker/Dockerfile -- base image pins a rotated-out internal ROCm apt repo
+    rm -f /etc/apt/sources.list.d/rocm.list && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        git wget ninja-build cmake python3-pip python3-dev build-essential jq libdwarf-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+    # Create groups if they don't exist
+    groupadd -r video 2>/dev/null || true
+    groupadd -r render 2>/dev/null || true
+
+    # Install Python packages with pip
+    pip3 install --upgrade pip && \
+    pip3 install wheel jupyter
+
+    # Clone and install Triton. Retried: this is a large clone and a transient
+    # disconnect here used to poison the cached image rather than fail the build.
+    cd /opt
+    for attempt in 1 2 3; do
+        rm -rf \$TRITON_PATH
+        git clone https://github.com/triton-lang/triton.git \$TRITON_PATH && break
+        echo \"triton clone failed (attempt \$attempt)\" >&2
+        [ \$attempt -lt 3 ] || exit 1
+        sleep 10
+    done
     cd \$TRITON_PATH
-    git checkout dd5823453bcc7973eabadb65f9d827c43281c434
-    pip install -e .
-    wget https://github.com/ROCm/rocprofiler-systems/releases/download/rocm-6.3.1/rocprofiler-systems-install.py
-    python3 ./rocprofiler-systems-install.py --prefix /opt/rocprofiler-systems --rocm 6.3
+    git checkout f7c1d69401e9f09050451f30776562954b05e850
+    pip3 install -e .
+
+    # Make the venv writable by all
+    chmod -R 777 /opt/venv
+
+    # rocSHMEM + rocshmem4py, so the provider tests run instead of skipping.
+    # See install_rocshmem.sh for the rationale, including the two arches.
+    ROCSHMEM_GPU_TARGETS='gfx942;gfx950' ROCSHMEM_PREFIX=/opt/rocshmem \
+        bash /opt/install_rocshmem.sh
     "
 
 %environment
     # Define environment variables
-    export TRITON_PATH=/workspace/triton
-    export PYTHONPATH=$TRITON_PATH/python/
-    export LD_LIBRARY_PATH=/opt/rocm/lib:$LD_LIBRARY_PATH
+    export TRITON_PATH=/opt/triton
     export ROCM_PATH=/opt/rocm
-    export PATH=/opt/conda/envs/py_3.10/bin:/opt/rocm/bin:$PATH
+    export PYTHONPATH=$TRITON_PATH
+    export LD_LIBRARY_PATH=$ROCM_PATH/lib:$LD_LIBRARY_PATH
+    export PATH="$ROCM_PATH/bin:$PATH"
     export OMPI_MCA_mtl="^ofi"
     export OMPI_MCA_pml="ob1"
+    export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+    export OMPI_ALLOW_RUN_AS_ROOT=1
+    # Set required RCCL environment variable for ROCm
+    export HSA_NO_SCRATCH_RECLAIM=1
+    export ROCSHMEM_PREFIX=/opt/rocshmem
 
 %runscript
     echo "Welcome to the ROCm-aware Apptainer image!"
-    source /opt/conda/bin/activate py_3.10
     exec "$@"

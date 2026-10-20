@@ -7,6 +7,7 @@ import triton
 # from streamk_kernel import streamk_gemm
 from gemm_all_scatter_bulk_synchronous import persistent_gemm
 from examples.common.utils import is_triton_interpret_set
+import iris
 
 gemm_kernel = persistent_gemm
 
@@ -15,6 +16,7 @@ class matmul(torch.autograd.Function):
     _debug = False
     _registers = None
     _spills = None
+    _num_xcds = iris.hip.get_num_xcc()
 
     @staticmethod
     def set_debug(debug: bool):
@@ -47,6 +49,7 @@ class matmul(torch.autograd.Function):
         BLK_N: int,
         BLK_K: int,
         gsize_m: int,
+        num_stages: int,
         heap_bases_ptr: torch.Tensor = None,
         arch: str = "gfx942",
         COLLECT_TIMESTAMPS: bool = False,
@@ -58,12 +61,9 @@ class matmul(torch.autograd.Function):
         M, K = a.shape
         _, N = b.shape
 
-        num_xcds = 1
-        if arch == "gfx942" or arch == "gfx950":
-            num_xcds = 8
+        num_xcds = matmul._num_xcds
 
         # TODO: Use arch-specific values.
-        num_stages = 2
         num_warps = 8
         waves_per_eu = 0
         mfma = 16
@@ -134,6 +134,7 @@ class matmul(torch.autograd.Function):
         BLK_N: int,
         BLK_K: int,
         gsize_m: int,
+        num_stages: int,
         heap_bases_ptr: torch.Tensor = None,
         arch: str = "gfx942",
         COLLECT_TIMESTAMPS: bool = False,
@@ -152,6 +153,7 @@ class matmul(torch.autograd.Function):
             BLK_N=BLK_N,
             BLK_K=BLK_K,
             gsize_m=gsize_m,
+            num_stages=num_stages,
             heap_bases_ptr=heap_bases_ptr,
             arch=arch,
             COLLECT_TIMESTAMPS=COLLECT_TIMESTAMPS,
